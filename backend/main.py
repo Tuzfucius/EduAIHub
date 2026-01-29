@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 
 from config import settings
 from database import init_db, close_db
-from routers import auth_router, proxy
+from routers import auth_router, rag_router, proxy
 
 
 # ... (omitted)
@@ -55,6 +55,7 @@ async def log_requests(request: Request, call_next):
 
 # 注册路由
 app.include_router(auth_router)
+app.include_router(rag_router)
 app.include_router(proxy.router)
 
 

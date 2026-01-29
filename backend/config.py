@@ -16,6 +16,12 @@ class Settings(BaseSettings):
     
     # CORS 配置
     CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
+
+    # RAG / Embedding 配置
+    EMBEDDING_API_URL: str = "https://api.siliconflow.cn/v1/embeddings"
+    EMBEDDING_API_KEY: str = "" # 必填
+    
+    BASE_DIR: str = "."
     
     model_config = SettingsConfigDict(
         env_file=".env",
