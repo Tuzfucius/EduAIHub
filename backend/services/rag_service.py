@@ -6,9 +6,9 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 import shutil
 
-from backend.pkg.huixiangdou.services import FeatureStore, CacheRetriever
-from backend.pkg.huixiangdou.primitive import FileName, Embedder, LLMReranker
-from backend.models.knowledge import KnowledgeBase, KnowledgeFile
+from pkg.huixiangdou.services import FeatureStore, CacheRetriever
+from pkg.huixiangdou.primitive import FileName, Embedder, LLMReranker
+from models.knowledge import KnowledgeBase, KnowledgeFile
 from config import settings
 
 # Global Cache Retriever Instance
@@ -158,4 +158,131 @@ class RagService:
             "references": formatted_refs
         }
         
+    def init_llm(self):
+        """Initialize LLM for agentic tasks"""
+        # Create a temporary config for LLM if not exists
+        llm_config_path = os.path.join(settings.BASE_DIR, "llm_config.toml")
+        
+        # We need a proper config structure for LLM class
+        # It expects ['llm']['server']
+        # We can map our settings to this
+        llm_config = {
+            "llm": {
+                "server": {
+                    "remote_type": "siliconcloud", # Default or from settings
+                    "remote_api_key": settings.LLM_API_KEY,
+                    "remote_llm_model": settings.LLM_MODEL,
+                    "base_url": settings.LLM_API_URL,
+                    "rpm": 500,
+                    "tpm": 20000
+                }
+            }
+        }
+        
+        import pytoml
+        with open(llm_config_path, 'w', encoding='utf-8') as f:
+            pytoml.dump(llm_config, f)
+            
+        from pkg.huixiangdou.services.llm import LLM
+        return LLM(config_path=llm_config_path)
+
+    async def auto_classify_file(self, file_path: str, filename: str, kbs: List[str]):
+        """
+        Use LLM to classify file into an existing KB or suggest a new one.
+        Returns: (kb_name, reason, is_new)
+        """
+        llm = self.init_llm()
+        
+        # Read file summary (first 1000 chars)
+        content_preview = ""
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content_preview = f.read(1000)
+        except:
+            content_preview = "Binary file or unreadable text."
+
+        # Define Tools
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "classify_knowledge_file",
+                    "description": "Classify a file into a Knowledge Base",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "target_kb_name": {
+                                "type": "string",
+                                "description": "The name of the target Knowledge Base. Pick from existing list if suitable, otherwise create a new descriptive name."
+                            },
+                            "reason": {
+                                "type": "string",
+                                "description": "Reason for this classification"
+                            },
+                            "is_new_kb": {
+                                "type": "boolean",
+                                "description": "True if this is a new KB name not in the existing list"
+                            }
+                        },
+                        "required": ["target_kb_name", "reason", "is_new_kb"]
+                    }
+                }
+            }
+        ]
+
+        prompt = f"""
+I have a file named "{filename}".
+Content Preview:
+{content_preview}
+
+Existing Knowledge Bases: {', '.join(kbs) if kbs else 'None'}
+
+Please classify this file into a suitable Knowledge Base. 
+If an existing KB matches, use it. 
+If not, invent a new short, descriptive KB name (e.g., 'Math', 'Physics', 'ProjectDocs').
+Call the tool to submit your decision.
+"""
+        
+        # We need to use LLM's chat method but it might not expose tools directly in 'chat' wrapper
+        # The wrapper in pkg.huixiangdou.services.llm.LLM.chat accepts `tools` argument!
+        # It usually returns content string. If tool called, OpenAI returns tool_calls in message.
+        # But the `chat` method in `llm.py` returns specific string content and logs response. 
+        # It does NOT return the full response object or tool calls.
+        
+        # Inspecting `llm.py`: 
+        # response = await openai_async_client.chat.completions.create(**kwargs)
+        # content = response.choices[0].message.content
+        # return content.strip()
+        
+        # PROBLEM: The existing LLM wrapper swallows tool calls!
+        # We need to bypass it or patch it.
+        # Since I am in `rag_service.py`, I can just use `openai_async_client` directly or modify wrapper.
+        # Modifying wrapper is better for long term, but risky now.
+        # I will use a raw call here for safety using the config from the wrapper instance.
+        
+        backend = list(llm.backends.values())[0]
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(base_url=backend.base_url, api_key=backend.api_key)
+        
+        messages = [{"role": "user", "content": prompt}]
+        
+        try:
+            response = await client.chat.completions.create(
+                model=backend.model,
+                messages=messages,
+                tools=tools,
+                tool_choice={"type": "function", "function": {"name": "classify_knowledge_file"}}
+            )
+            
+            tool_calls = response.choices[0].message.tool_calls
+            if tool_calls:
+                args = json.loads(tool_calls[0].function.arguments)
+                return args.get("target_kb_name"), args.get("reason"), args.get("is_new_kb")
+            
+            return None, "No decision made", False
+            
+        except Exception as e:
+            print(f"Auto-classify failed: {e}")
+            return "Unsorted", "Classification failed", True
+
 rag_service = RagService()

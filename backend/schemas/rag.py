@@ -63,3 +63,19 @@ class RagResponse(BaseModel):
     answer: str
     references: List[Reference]
     rejected: bool # 是否被拒答
+
+class TempFileUploadResponse(BaseModel):
+    temp_file_id: str
+    original_filename: str
+    summary: str  # Preview of content
+
+class AutoClassifyRequest(BaseModel):
+    temp_file_id: str
+    original_filename: str
+
+class AutoClassifyResponse(BaseModel):
+    kb_name: str
+    kb_id: int
+    reason: str
+    status: str
+    file_id: int  # Created KnowledgeFile ID

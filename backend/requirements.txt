@@ -23,3 +23,8 @@ lxml_html_clean
 pytoml
 numpy
 scikit-learn
+texttable
+openai
+requests
+jieba
+duckduckgo-search

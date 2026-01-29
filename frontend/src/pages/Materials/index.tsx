@@ -1,46 +1,47 @@
-/**
- * Materials - 材料分类页面 (占位)
- */
-import React from 'react';
-import { FolderOpen, FileText } from 'lucide-react';
-import { useTheme } from '@/contexts/ThemeContext';
 
-export default function Materials() {
-    const { getGradientStyle } = useTheme();
+import React, { useEffect } from 'react';
+import LeftPanel from './components/LeftPanel';
+import CenterPanel from './components/CenterPanel';
+import RightPanel from './components/RightPanel';
+import { useStudyStore } from '@/store/useStudyStore';
+import { clsx } from 'clsx';
+import { ragService } from '@/services/ragService';
+
+export default function StudyStation() {
+    const { isLeftPanelOpen, isRightPanelOpen, setCurrentKb, currentKb } = useStudyStore();
 
     return (
-        <div className="min-h-full p-4 md:p-6 flex items-center justify-center">
-            <div className="text-center max-w-md">
-                <div
-                    className="w-24 h-24 shape-xl mx-auto mb-6 flex items-center justify-center"
-                    style={getGradientStyle()}
-                >
-                    <FolderOpen className="w-12 h-12 text-white" />
+        <div className="flex h-full w-full overflow-hidden relative"
+            style={{ backgroundColor: 'var(--md-surface)', color: 'var(--md-on-surface)' }}>
+
+            {/* Left Panel - Knowledge Nav */}
+            <div
+                className={clsx(
+                    "flex-shrink-0 transition-all duration-300 ease-in-out border-r",
+                    isLeftPanelOpen ? "w-64" : "w-0 overflow-hidden"
+                )}
+                style={{ borderColor: 'var(--md-outline-variant)' }}
+            >
+                <div className="w-64 h-full">
+                    <LeftPanel />
                 </div>
+            </div>
 
-                <h1
-                    className="text-2xl font-medium mb-2"
-                    style={{ color: 'var(--md-on-surface)' }}
-                >
-                    材料分类
-                </h1>
+            {/* Center Panel - The Canvas */}
+            <div className="flex-1 h-full min-w-0 flex flex-col overflow-hidden relative z-0">
+                <CenterPanel />
+            </div>
 
-                <p
-                    className="mb-6"
-                    style={{ color: 'var(--md-on-surface-variant)' }}
-                >
-                    智能文件分类管理功能即将推出。我们将帮助您自动整理学习资料，提高效率。
-                </p>
-
-                <div
-                    className="inline-flex items-center gap-2 px-4 py-2 shape-full"
-                    style={{
-                        backgroundColor: 'var(--md-secondary-container)',
-                        color: 'var(--md-on-secondary-container)',
-                    }}
-                >
-                    <FileText className="w-4 h-4" />
-                    <span className="text-sm font-medium">敬请期待</span>
+            {/* Right Panel - The Tutor */}
+            <div
+                className={clsx(
+                    "flex-shrink-0 transition-all duration-300 ease-in-out border-l",
+                    isRightPanelOpen ? "w-[400px]" : "w-0 overflow-hidden"
+                )}
+                style={{ borderColor: 'var(--md-outline-variant)' }}
+            >
+                <div className="w-[400px] h-full">
+                    <RightPanel />
                 </div>
             </div>
         </div>

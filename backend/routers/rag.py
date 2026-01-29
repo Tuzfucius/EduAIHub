@@ -13,6 +13,15 @@ from schemas.rag import KnowledgeBaseCreate, KnowledgeBaseResponse, KnowledgeFil
 from routers.auth import get_current_user
 from config import settings
 from services.rag_service import rag_service
+from schemas.rag import (
+    KnowledgeBaseCreate, KnowledgeBaseResponse, KnowledgeFileResponse, 
+    RagQuery, RagResponse, TempFileUploadResponse, AutoClassifyRequest, AutoClassifyResponse
+)
+
+import uuid
+import shutil
+
+# ... existing imports ...
 
 router = APIRouter(prefix="/api/rag", tags=["知识库 (RAG)"])
 
@@ -195,9 +204,136 @@ async def rag_query(
         # Maybe allow query even if not fully ready? No.
         raise HTTPException(status_code=400, detail=f"知识库状态不可用: {kb.status}")
         
-    # Run Query
     try:
         result = await rag_service.query_kb(kb, query.question)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"检索失败: {str(e)}")
+
+@router.post("/upload/temp", response_model=TempFileUploadResponse, summary="上传临时文件(用于自动分类)")
+async def upload_temp_file(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user)
+):
+    """Upload file to a temporary area for classification"""
+    # Create temp dir
+    temp_dir = os.path.join(settings.BASE_DIR, "data", "rag", "temp", str(current_user.id))
+    os.makedirs(temp_dir, exist_ok=True)
+    
+    # Unique ID
+    temp_id = str(uuid.uuid4())
+    ext = os.path.splitext(file.filename)[1]
+    save_path = os.path.join(temp_dir, temp_id + ext)
+    
+    try:
+        with open(save_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Save failed: {e}")
+        
+    # Read summary (first 500 chars)
+    summary = "Binary content"
+    try:
+        with open(save_path, "r", encoding="utf-8", errors="ignore") as f:
+            summary = f.read(500).replace("\n", " ")
+    except:
+        pass
+        
+    return TempFileUploadResponse(
+        temp_file_id=temp_id + ext,
+        original_filename=file.filename,
+        summary=summary
+    )
+
+@router.post("/classify", response_model=AutoClassifyResponse, summary="自动分类并归档文件")
+async def auto_classify(
+    req: AutoClassifyRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Auto identify which KB the file belongs to, create KB if needed, and move file.
+    """
+    temp_dir = os.path.join(settings.BASE_DIR, "data", "rag", "temp", str(current_user.id))
+    temp_path = os.path.join(temp_dir, req.temp_file_id)
+    
+    if not os.path.exists(temp_path):
+        raise HTTPException(status_code=404, detail="Temp file not found")
+        
+    # 1. Get existing KBs
+    result = await db.execute(select(KnowledgeBase).where(KnowledgeBase.user_id == current_user.id))
+    existing_kbs = result.scalars().all()
+    kb_names = [kb.name for kb in existing_kbs]
+    
+    # 2. Call LLM to classify
+    target_kb_name, reason, is_new = await rag_service.auto_classify_file(
+        file_path=temp_path, 
+        filename=req.original_filename, 
+        kbs=kb_names
+    )
+    
+    if not target_kb_name:
+        target_kb_name = "未分类归档"
+        is_new = True
+        
+    # 3. Find or Create KB
+    target_kb = None
+    if not is_new:
+        for kb in existing_kbs:
+            if kb.name == target_kb_name:
+                target_kb = kb
+                break
+    
+    if not target_kb:
+        # Create New KB
+        import hashlib
+        import time
+        unique_str = f"{current_user.id}-{target_kb_name}-{time.time()}"
+        kb_hash = hashlib.md5(unique_str.encode()).hexdigest()[0:8]
+        work_dir = os.path.join(settings.BASE_DIR, "data", "rag", str(current_user.id), kb_hash)
+        os.makedirs(work_dir, exist_ok=True)
+        
+        target_kb = KnowledgeBase(
+            user_id=current_user.id,
+            name=target_kb_name,
+            description=f"Auto-created for {req.original_filename}. Reason: {reason}",
+            status="empty",
+            work_dir=work_dir
+        )
+        db.add(target_kb)
+        await db.commit()
+        await db.refresh(target_kb)
+        
+    # 4. Move File from Temp to KB Origin
+    uploads_dir = os.path.join(target_kb.work_dir, "origin")
+    os.makedirs(uploads_dir, exist_ok=True)
+    
+    # Handle filename conflict?
+    final_path = os.path.join(uploads_dir, req.original_filename)
+    if os.path.exists(final_path):
+        base, ext = os.path.splitext(req.original_filename)
+        final_path = os.path.join(uploads_dir, f"{base}_{uuid.uuid4().hex[:4]}{ext}")
+        
+    shutil.move(temp_path, final_path)
+    file_size = os.path.getsize(final_path)
+    
+    # 5. Create KnowledgeFile record
+    new_file = KnowledgeFile(
+        kb_id=target_kb.id,
+        filename=os.path.basename(final_path),
+        file_path=final_path,
+        file_size=file_size,
+        status="uploaded"
+    )
+    db.add(new_file)
+    target_kb.status = "building" # Mark validation needed
+    await db.commit()
+    await db.refresh(new_file)
+    
+    return AutoClassifyResponse(
+        kb_name=target_kb.name,
+        kb_id=target_kb.id,
+        reason=reason or "Auto classified",
+        status="success",
+        file_id=new_file.id
+    )

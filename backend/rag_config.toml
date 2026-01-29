@@ -1,0 +1,7 @@
+[feature_store]
+reject_throttle = 0.2
+embedding_model_path = "https://api.siliconflow.cn/v1/embeddings"
+reranker_model_path = "BAAI/bge-reranker-v2-m3"
+api_token = ""
+api_rpm = 500
+api_tpm = 20000

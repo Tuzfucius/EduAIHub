@@ -245,8 +245,8 @@ export default function AISolver() {
     };
 
     // 发送消息
-    const handleSend = useCallback(async (images?: string[]) => {
-        const hasContent = inputValue.trim() || (images && images.length > 0);
+    const handleSend = useCallback(async (images?: string[], files?: File[]) => {
+        const hasContent = inputValue.trim() || (images && images.length > 0) || (files && files.length > 0);
         if (!hasContent || isLoading || !activeSessionId) return;
 
         if (!aiService.checkApiConfigured()) {
@@ -255,8 +255,35 @@ export default function AISolver() {
         }
 
         setError(null);
-        const userContent = inputValue.trim();
+        let userContent = inputValue.trim();
         setInputValue('');
+
+        // 处理文件上传和分类
+        if (files && files.length > 0) {
+            // Import dynamically or assume imported
+            const { ragService } = await import('@/services/ragService');
+
+            for (const file of files) {
+                try {
+                    // 1. Upload Temp
+                    const temp = await ragService.uploadTempFile(file);
+
+                    // 2. Add temporary system msg or toast
+                    // For now, append to user prompt so AI knows about it
+                    userContent += `\n[System: User uploaded file "${file.name}". Content preview: ${temp.summary.substring(0, 100)}...]`;
+
+                    // 3. Trigger Auto Classify (Async, don't block chat completely? Or block?)
+                    // Blocking is safer for 'chat about file' scenario
+                    const classifyRes = await ragService.autoClassify(temp.temp_file_id, file.name);
+
+                    userContent += `\n[System: File automatically archived to Knowledge Base: "${classifyRes.kb_name}" (Reason: ${classifyRes.reason})]`;
+
+                } catch (e) {
+                    console.error(e);
+                    setError(`File upload failed: ${file.name}`);
+                }
+            }
+        }
 
         // 添加用户消息
         const userMessage = chatService.addMessage(activeSessionId, 'user', userContent, images || []);

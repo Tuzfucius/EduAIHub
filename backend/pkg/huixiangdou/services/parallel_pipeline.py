@@ -9,7 +9,7 @@ from typing import List, Tuple, Union, Generator, AsyncGenerator
 import pytoml
 from loguru import logger
 
-from huixiangdou.primitive import Query, Chunk
+from ..primitive import Query, Chunk
 
 from .helper import ErrorCode
 from .llm import LLM

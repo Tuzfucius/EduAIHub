@@ -1,4 +1,4 @@
-from huixiangdou.primitive import Query
+from ..primitive import Query
 from .helper import ErrorCode
 import os
 import json

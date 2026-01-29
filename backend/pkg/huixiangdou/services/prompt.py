@@ -3,7 +3,7 @@ import re
 # PreprocNode
 SCORING_QUESTION_TEMPLATE_CN = '“{}”\n请仔细阅读以上内容，判断句子是否是个有主题的疑问句，结果用 0～10 表示。直接提供得分不要解释。\n判断标准：有主语谓语宾语并且是疑问句得 10 分；缺少主谓宾扣分；陈述句直接得 0 分；不是疑问句直接得 0 分。直接提供得分不要解释。'
 # modified from kimi
-INTENTION_TEMPLATE_CN = """你是一个文本专家，擅长对句子进行语义角色标注、情感分析和意图识别。
+INTENTION_TEMPLATE_CN = r"""你是一个文本专家，擅长对句子进行语义角色标注、情感分析和意图识别。
 
 ## 目标
 在确保内容安全合规的情况下通过遵循指令和提供有帮助的回复来帮助用户实现他们的目标。
@@ -53,7 +53,7 @@ CR_CN = """请根据历史对话，重写输入的文本。
 一步步分析，首先历史对话包含哪些话题；其次哪个话题与输入文本中的代词最相关；用相关的话题，替换输入中的代词和缺失的部分。直接返回重写后的文本不要解释。"""
 
 SCORING_QUESTION_TEMPLATE_EN = '"{}"\nPlease read the content above carefully and judge whether the sentence is a thematic question. Rate it on a scale of 0-10. Only provide the score, no explanation.\nThe criteria are as follows: a sentence gets 10 points if it has a subject, predicate, object and is a question; points are deducted for missing subject, predicate or object; declarative sentences get 0 points; sentences that are not questions also get 0 points. Just give the score, no explanation.'
-INTENTION_TEMPLATE_EN = '''You are a text expert proficient in semantic role labeling, sentiment analysis, and intent recognition for sentences.
+INTENTION_TEMPLATE_EN = r'''You are a text expert proficient in semantic role labeling, sentiment analysis, and intent recognition for sentences.
 
 ## Objective
 To assist users in achieving their goals by following instructions and providing helpful responses while ensuring content is safe and compliant.

@@ -10,7 +10,7 @@ from typing import List, Union, AsyncGenerator, Tuple
 import pytoml
 from loguru import logger
 
-from huixiangdou.primitive import Query
+from ..primitive import Query
 
 from .helper import ErrorCode, is_truth
 from .llm import LLM
