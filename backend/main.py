@@ -1,11 +1,15 @@
 """FastAPI 应用入口"""
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from config import settings
 from database import init_db, close_db
-from routers import auth_router
+from routers import auth_router, proxy
+
+
+# ... (omitted)
+
 
 
 @asynccontextmanager
@@ -41,8 +45,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """日志中间件"""
+    print(f"📥 [{request.method}] {request.url}")
+    response = await call_next(request)
+    print(f"📤 [{request.method}] {request.url} -> {response.status_code}")
+    return response
+
 # 注册路由
 app.include_router(auth_router)
+app.include_router(proxy.router)
 
 
 @app.get("/", tags=["根路径"])
@@ -55,6 +68,27 @@ async def root():
         "status": "running"
     }
 
+
+
+from pydantic import BaseModel
+from typing import Dict, Any, Optional
+
+class LogMessage(BaseModel):
+    tag: str
+    message: str
+    data: Optional[Dict[str, Any]] = None
+
+@app.post("/api/log", tags=["Debug"])
+async def debug_log(log: LogMessage):
+    """前端日志中继"""
+    print(f"📝 [{log.tag}] {log.message}")
+    if log.data:
+        import json
+        try:
+            print(json.dumps(log.data, indent=2, ensure_ascii=False))
+        except:
+            print(log.data)
+    return {"status": "ok"}
 
 @app.get("/health", tags=["健康检查"])
 async def health_check():
