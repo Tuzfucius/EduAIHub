@@ -1,158 +1,33 @@
 /**
  * ChatMessage - 聊天消息气泡组件
  */
-import React, { useState } from 'react';
-import { User, Bot, Copy, Check } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { User, Bot, Copy, Check, ChevronDown, ChevronRight, BrainCircuit } from 'lucide-react';
 import { Message } from '@/services/chatService';
 import { useTheme } from '@/contexts/ThemeContext';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface ChatMessageProps {
     message: Message;
 }
 
-// 简单的 Markdown 渲染（处理代码块、加粗、链接等）
-function renderMarkdown(content: string): React.ReactNode {
-    const lines = content.split('\n');
-    const elements: React.ReactNode[] = [];
-    let inCodeBlock = false;
-    let codeLanguage = '';
-    let codeContent: string[] = [];
-    let key = 0;
-
-    const processInlineMarkdown = (text: string): React.ReactNode => {
-        // 处理行内代码
-        const parts = text.split(/(`[^`]+`)/g);
-        return parts.map((part, i) => {
-            if (part.startsWith('`') && part.endsWith('`')) {
-                return (
-                    <code
-                        key={i}
-                        className="px-1.5 py-0.5 text-sm shape-sm font-mono"
-                        style={{ backgroundColor: 'var(--md-surface-container-highest)' }}
-                    >
-                        {part.slice(1, -1)}
-                    </code>
-                );
-            }
-            // 处理加粗
-            const boldParts = part.split(/(\*\*[^*]+\*\*)/g);
-            return boldParts.map((bp, j) => {
-                if (bp.startsWith('**') && bp.endsWith('**')) {
-                    return <strong key={`${i}-${j}`}>{bp.slice(2, -2)}</strong>;
-                }
-                return bp;
-            });
-        });
-    };
-
-    for (const line of lines) {
-        // 代码块开始
-        if (line.startsWith('```') && !inCodeBlock) {
-            inCodeBlock = true;
-            codeLanguage = line.slice(3).trim();
-            codeContent = [];
-            continue;
-        }
-
-        // 代码块结束
-        if (line.startsWith('```') && inCodeBlock) {
-            inCodeBlock = false;
-            elements.push(
-                <CodeBlock key={key++} language={codeLanguage} code={codeContent.join('\n')} />
-            );
-            codeLanguage = '';
-            codeContent = [];
-            continue;
-        }
-
-        // 代码块内容
-        if (inCodeBlock) {
-            codeContent.push(line);
-            continue;
-        }
-
-        // 标题
-        if (line.startsWith('### ')) {
-            elements.push(
-                <h3 key={key++} className="text-lg font-semibold mt-4 mb-2" style={{ color: 'var(--md-on-surface)' }}>
-                    {processInlineMarkdown(line.slice(4))}
-                </h3>
-            );
-            continue;
-        }
-        if (line.startsWith('## ')) {
-            elements.push(
-                <h2 key={key++} className="text-xl font-semibold mt-4 mb-2" style={{ color: 'var(--md-on-surface)' }}>
-                    {processInlineMarkdown(line.slice(3))}
-                </h2>
-            );
-            continue;
-        }
-        if (line.startsWith('# ')) {
-            elements.push(
-                <h1 key={key++} className="text-2xl font-bold mt-4 mb-2" style={{ color: 'var(--md-on-surface)' }}>
-                    {processInlineMarkdown(line.slice(2))}
-                </h1>
-            );
-            continue;
-        }
-
-        // 列表项
-        if (line.match(/^[-*]\s/)) {
-            elements.push(
-                <li key={key++} className="ml-4 list-disc" style={{ color: 'var(--md-on-surface)' }}>
-                    {processInlineMarkdown(line.slice(2))}
-                </li>
-            );
-            continue;
-        }
-
-        // 数字列表
-        if (line.match(/^\d+\.\s/)) {
-            const match = line.match(/^(\d+)\.\s(.*)$/);
-            if (match) {
-                elements.push(
-                    <li key={key++} className="ml-4 list-decimal" style={{ color: 'var(--md-on-surface)' }}>
-                        {processInlineMarkdown(match[2])}
-                    </li>
-                );
-            }
-            continue;
-        }
-
-        // 空行
-        if (line.trim() === '') {
-            elements.push(<div key={key++} className="h-2" />);
-            continue;
-        }
-
-        // 普通段落
-        elements.push(
-            <p key={key++} className="leading-relaxed" style={{ color: 'var(--md-on-surface)' }}>
-                {processInlineMarkdown(line)}
-            </p>
-        );
-    }
-
-    // 处理未结束的代码块
-    if (inCodeBlock && codeContent.length > 0) {
-        elements.push(
-            <CodeBlock key={key++} language={codeLanguage} code={codeContent.join('\n')} />
-        );
-    }
-
-    return elements;
-}
-
 // 代码块组件
-function CodeBlock({ language, code }: { language: string; code: string }) {
+const CodeBlock = React.memo(({ children, className }: { children: React.ReactNode; className?: string }) => {
     const [copied, setCopied] = useState(false);
+    const match = /language-(\w+)/.exec(className || '');
+    const language = match ? match[1] : '';
+    const code = String(children).replace(/\n$/, '');
 
     const handleCopy = async () => {
         await navigator.clipboard.writeText(code);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
     };
+
+    if (!match) {
+        return <code className={className}>{children}</code>;
+    }
 
     return (
         <div className="my-3 shape-lg overflow-hidden" style={{ backgroundColor: 'var(--md-surface-container-highest)' }}>
@@ -163,7 +38,7 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
                     color: 'var(--md-on-surface-variant)',
                 }}
             >
-                <span>{language || 'code'}</span>
+                <span>{language}</span>
                 <button
                     onClick={handleCopy}
                     className="flex items-center gap-1 px-2 py-1 shape-sm hover:bg-white/10 transition-colors"
@@ -173,15 +48,70 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
                 </button>
             </div>
             <pre className="p-4 overflow-x-auto text-sm">
-                <code style={{ color: 'var(--md-on-surface)' }}>{code}</code>
+                <code className={className} style={{ color: 'var(--md-on-surface)' }}>{children}</code>
             </pre>
         </div>
     );
-}
+});
+
+// 思考过程组件
+const ThinkingBlock = ({ content }: { content: string }) => {
+    const [expanded, setExpanded] = useState(false);
+
+    return (
+        <div className="mb-4">
+            <button
+                onClick={() => setExpanded(!expanded)}
+                className="flex items-center gap-2 text-sm font-medium opacity-70 hover:opacity-100 transition-opacity mb-2"
+                style={{ color: 'var(--md-primary)' }}
+            >
+                {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                <BrainCircuit className="w-4 h-4" />
+                <span>思考过程</span>
+            </button>
+            {expanded && (
+                <div
+                    className="pl-4 border-l-2 text-sm opacity-80"
+                    style={{
+                        borderColor: 'var(--md-primary-container)',
+                        color: 'var(--md-on-surface-variant)'
+                    }}
+                >
+                    <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                            code: CodeBlock as any
+                        }}
+                    >
+                        {content}
+                    </ReactMarkdown>
+                </div>
+            )}
+        </div>
+    );
+};
 
 export default function ChatMessage({ message }: ChatMessageProps) {
     const { getGradientStyle } = useTheme();
     const isUser = message.role === 'user';
+
+    // 处理消息内容，分离思考过程
+    const { thoughtContent, mainContent } = useMemo(() => {
+        const text = message.content;
+
+        // 匹配 <think>...</think> 标签，支持多行和非贪婪匹配
+        // 注意：一些模型可能输出 <think> 但未闭合（流式传输中），需要处理
+        const thinkRegex = /<think>([\s\S]*?)(?:<\/think>|$)/;
+        const match = text.match(thinkRegex);
+
+        if (match) {
+            const thoughtContent = match[1].trim();
+            const mainContent = text.replace(match[0], '').trim();
+            return { thoughtContent, mainContent };
+        }
+
+        return { thoughtContent: '', mainContent: text };
+    }, [message.content]);
 
     return (
         <div className={`flex gap-3 ${isUser ? 'flex-row-reverse' : ''}`}>
@@ -199,23 +129,52 @@ export default function ChatMessage({ message }: ChatMessageProps) {
 
             {/* 消息内容 */}
             <div
-                className={`max-w-[80%] px-4 py-3 shape-lg ${isUser ? 'shape-tr-none' : 'shape-tl-none'}`}
+                className={`max-w-[90%] md:max-w-[80%] px-4 py-3 shape-lg ${isUser ? 'shape-tr-none' : 'shape-tl-none'}`}
                 style={{
                     backgroundColor: isUser
                         ? 'var(--md-primary-container)'
                         : 'var(--md-surface-container)',
+                    color: isUser
+                        ? 'var(--md-on-primary-container)'
+                        : 'var(--md-on-surface)',
                 }}
             >
-                {isUser ? (
-                    <p style={{ color: 'var(--md-on-primary-container)' }}>{message.content}</p>
-                ) : (
-                    <div className="prose prose-sm max-w-none">
-                        {renderMarkdown(message.content)}
-                        {message.isStreaming && (
-                            <span className="inline-block w-2 h-4 ml-1 animate-pulse" style={{ backgroundColor: 'var(--md-primary)' }} />
-                        )}
-                    </div>
+                {!isUser && thoughtContent && (
+                    <ThinkingBlock content={thoughtContent} />
                 )}
+
+                <div className="prose prose-sm max-w-none dark:prose-invert">
+                    {isUser ? (
+                        <p className="whitespace-pre-wrap">{message.content}</p>
+                    ) : (
+                        <>
+                            <ReactMarkdown
+                                remarkPlugins={[remarkGfm]}
+                                components={{
+                                    code: CodeBlock as any,
+                                    // 确保链接在新标签页打开
+                                    a: ({ node, ...props }) => (
+                                        <a {...props} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--md-primary)' }} />
+                                    ),
+                                    table: ({ node, ...props }) => (
+                                        <div className="my-4 overflow-x-auto">
+                                            <table className="min-w-full divide-y divide-gray-300 dark:divide-gray-700 border border-gray-200 dark:border-gray-700" {...props} />
+                                        </div>
+                                    ),
+                                    thead: ({ node, ...props }) => <thead className="bg-black/5 dark:bg-white/5" {...props} />,
+                                    th: ({ node, ...props }) => <th className="px-3 py-2 text-left text-sm font-semibold" {...props} />,
+                                    td: ({ node, ...props }) => <td className="px-3 py-2 text-sm border-t border-gray-200 dark:border-gray-700" {...props} />,
+                                }}
+                            >
+                                {mainContent || (message.isStreaming ? '...' : '')}
+                                {/* 如果 mainContent 为空且正在流式传输，可能正在输出 thinking，或者刚开始 */}
+                            </ReactMarkdown>
+                            {message.isStreaming && !mainContent && !thoughtContent && (
+                                <span className="inline-block w-2 h-4 ml-1 animate-pulse" style={{ backgroundColor: 'var(--md-primary)' }} />
+                            )}
+                        </>
+                    )}
+                </div>
             </div>
         </div>
     );
