@@ -125,8 +125,9 @@ export default function AISolver() {
     }, [activeSessionId, refreshSessions]);
 
     // 发送消息
-    const handleSend = useCallback(async () => {
-        if (!inputValue.trim() || isLoading || !activeSessionId) return;
+    const handleSend = useCallback(async (images?: string[]) => {
+        const hasContent = inputValue.trim() || (images && images.length > 0);
+        if (!hasContent || isLoading || !activeSessionId) return;
 
         // 检查 API 配置
         if (!aiService.checkApiConfigured()) {
@@ -139,7 +140,7 @@ export default function AISolver() {
         setInputValue('');
 
         // 添加用户消息
-        const userMessage = chatService.addMessage(activeSessionId, 'user', userContent);
+        const userMessage = chatService.addMessage(activeSessionId, 'user', userContent, images || []);
         setMessages(prev => [...prev, userMessage]);
 
         // 创建 AI 消息占位

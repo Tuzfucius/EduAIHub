@@ -6,10 +6,15 @@
 import { getActiveLlmApi, ApiConfig } from './settingsService';
 import { buildSystemPrompt } from './promptService';
 
+
+
 export interface ChatMessage {
     role: 'system' | 'user' | 'assistant';
     content: string;
+    images?: string[]; // base64 images
 }
+
+// ... unchanged imports and interfaces ...
 
 export interface StreamCallbacks {
     onStart?: () => void;
@@ -43,9 +48,30 @@ function buildOpenAIRequestBody(
     model: string,
     stream: boolean = true
 ): object {
+    const formattedMessages = messages.map(m => {
+        if (m.role === 'user' && m.images && m.images.length > 0) {
+            return {
+                role: m.role,
+                content: [
+                    { type: 'text', text: m.content },
+                    ...m.images.map(img => ({
+                        type: 'image_url',
+                        image_url: {
+                            url: img.startsWith('data:') ? img : `data:image/jpeg;base64,${img}`
+                        }
+                    }))
+                ]
+            };
+        }
+        return {
+            role: m.role,
+            content: m.content
+        };
+    });
+
     return {
         model,
-        messages,
+        messages: formattedMessages,
         stream,
         temperature: 0.7,
         max_tokens: 4096,
@@ -64,13 +90,42 @@ function buildAnthropicRequestBody(
     const systemMessage = messages.find(m => m.role === 'system');
     const chatMessages = messages.filter(m => m.role !== 'system');
 
+    const formattedMessages = chatMessages.map(m => {
+        if (m.role === 'user' && m.images && m.images.length > 0) {
+            return {
+                role: m.role,
+                content: [
+                    ...m.images.map(img => {
+                        // 移除 data:image/xxx;base64, 前缀，因为 Anthropic 只需要 data 部分
+                        const base64Data = img.replace(/^data:image\/\w+;base64,/, '');
+                        // 尝试从 base64 前缀获取 mime type，默认为 jpeg
+                        let mediaType = 'image/jpeg';
+                        const match = img.match(/^data:(image\/\w+);base64,/);
+                        if (match) mediaType = match[1];
+
+                        return {
+                            type: 'image',
+                            source: {
+                                type: 'base64',
+                                media_type: mediaType,
+                                data: base64Data
+                            }
+                        };
+                    }),
+                    { type: 'text', text: m.content }
+                ]
+            };
+        }
+        return {
+            role: m.role,
+            content: m.content
+        };
+    });
+
     return {
         model,
         system: systemMessage?.content || '',
-        messages: chatMessages.map(m => ({
-            role: m.role,
-            content: m.content,
-        })),
+        messages: formattedMessages,
         stream,
         max_tokens: 4096,
     };

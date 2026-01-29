@@ -139,6 +139,22 @@ export default function ChatMessage({ message }: ChatMessageProps) {
                         : 'var(--md-on-surface)',
                 }}
             >
+
+                {/* 图片附件展示 */}
+                {message.images && message.images.length > 0 && (
+                    <div className="flex flex-wrap gap-2 mb-3">
+                        {message.images.map((img, i) => (
+                            <img
+                                key={i}
+                                src={img.startsWith('data:') ? img : `data:image/jpeg;base64,${img}`}
+                                alt="attachment"
+                                className="max-w-full max-h-64 object-contain rounded-lg border border-black/10 dark:border-white/10 cursor-pointer hover:opacity-90 transition-opacity"
+                                onClick={() => window.open(img.startsWith('data:') ? img : `data:image/jpeg;base64,${img}`)}
+                            />
+                        ))}
+                    </div>
+                )}
+
                 {!isUser && thoughtContent && (
                     <ThinkingBlock content={thoughtContent} />
                 )}

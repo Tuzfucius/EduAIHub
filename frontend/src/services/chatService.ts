@@ -11,6 +11,7 @@ export interface Message {
     content: string;
     timestamp: string;
     isStreaming?: boolean;
+    images?: string[]; // base64 images
 }
 
 export interface ChatSession {
@@ -119,6 +120,7 @@ export function addMessage(
     sessionId: string,
     role: 'user' | 'assistant',
     content: string,
+    images: string[] = [],
     isStreaming: boolean = false
 ): Message {
     const sessions = getSessions();
@@ -132,6 +134,7 @@ export function addMessage(
         id: generateId(),
         role,
         content,
+        images,
         timestamp: new Date().toISOString(),
         isStreaming,
     };
