@@ -1,6 +1,6 @@
 /**
  * AI Solver - AI 助手主页面
- * 完整的聊天界面，支持流式响应和会话管理
+ * 完整的聊天界面，支持流式响应、会话管理、多模态输入和参数配置
  */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
@@ -17,6 +17,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { useAuth } from '@/contexts/AuthContext';
 import ChatMessage from './components/ChatMessage';
 import ChatInput from './components/ChatInput';
+import ModelConfigPanel from './components/ModelConfigPanel';
 import * as chatService from '@/services/chatService';
 import * as aiService from '@/services/aiService';
 import * as settingsService from '@/services/settingsService';
@@ -33,11 +34,17 @@ export default function AISolver() {
     const [inputValue, setInputValue] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [showSidebar, setShowSidebar] = useState(false);
+    const [showConfig, setShowConfig] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [modelParams, setModelParams] = useState({ temperature: 0.7, top_p: 1.0 });
+    const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
 
     // Refs
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
+    const configPanelRef = useRef<HTMLDivElement>(null);
+    const messagesContainerRef = useRef<HTMLDivElement>(null);
+    const prevMessagesLengthRef = useRef(0);
 
     // 初始化用户设置
     useEffect(() => {
@@ -72,14 +79,62 @@ export default function AISolver() {
             const session = chatService.getSession(activeSessionId);
             if (session) {
                 setMessages(session.messages);
+                // 切换会话后滚动到底部
+                setTimeout(() => {
+                    messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+                }, 0);
             }
         }
     }, [activeSessionId]);
 
-    // 自动滚动到底部
+    // 智能滚动：仅在添加新消息或正在流式生成时滚动
     useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages]);
+        const currentLength = messages.length;
+        const prevLength = prevMessagesLengthRef.current;
+
+        // 条件：新消息添加 或 有消息正在流式生成
+        const hasNewMessage = currentLength > prevLength;
+        const isStreaming = messages.some(m => m.isStreaming);
+
+        if ((hasNewMessage || isStreaming) && shouldAutoScroll) {
+            // 使用 requestAnimationFrame 确保 DOM 已更新
+            requestAnimationFrame(() => {
+                messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+            });
+        }
+
+        prevMessagesLengthRef.current = currentLength;
+    }, [messages, shouldAutoScroll]);
+
+    // 检测用户是否手动滚动（如果向上滚动，禁用自动滚动）
+    useEffect(() => {
+        const container = messagesContainerRef.current;
+        if (!container) return;
+
+        const handleScroll = () => {
+            const { scrollTop, scrollHeight, clientHeight } = container;
+            const isNearBottom = scrollHeight - scrollTop - clientHeight < 100;
+            setShouldAutoScroll(isNearBottom);
+        };
+
+        container.addEventListener('scroll', handleScroll, { passive: true });
+        return () => container.removeEventListener('scroll', handleScroll);
+    }, []);
+
+    // 点击外部关闭配置面板
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (configPanelRef.current && !configPanelRef.current.contains(event.target as Node)) {
+                setShowConfig(false);
+            }
+        };
+        if (showConfig) {
+            document.addEventListener('mousedown', handleClickOutside);
+        }
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, [showConfig]);
 
     // 刷新会话列表
     const refreshSessions = useCallback(() => {
@@ -124,35 +179,26 @@ export default function AISolver() {
         }
     }, [activeSessionId, refreshSessions]);
 
-    // 发送消息
-    const handleSend = useCallback(async (images?: string[]) => {
-        const hasContent = inputValue.trim() || (images && images.length > 0);
-        if (!hasContent || isLoading || !activeSessionId) return;
-
-        // 检查 API 配置
-        if (!aiService.checkApiConfigured()) {
-            setError('请先在设置中配置 API');
-            return;
-        }
-
-        setError(null);
-        const userContent = inputValue.trim();
-        setInputValue('');
-
-        // 添加用户消息
-        const userMessage = chatService.addMessage(activeSessionId, 'user', userContent, images || []);
-        setMessages(prev => [...prev, userMessage]);
+    // 核心发送逻辑
+    const executeChat = async (currentMessages: chatService.Message[], userMsg: chatService.Message) => {
+        if (!activeSessionId) return;
 
         // 创建 AI 消息占位
-        const aiMessage = chatService.addMessage(activeSessionId, 'assistant', '', true);
-        setMessages(prev => [...prev, aiMessage]);
+        const aiMessage = chatService.addMessage(activeSessionId, 'assistant', '', [], true);
+        setMessages([...currentMessages, aiMessage]);
 
         setIsLoading(true);
         abortControllerRef.current = new AbortController();
 
         try {
-            // 获取历史消息
-            const historyMessages = chatService.getMessagesForAI(activeSessionId);
+            // 获取历史消息 (过滤掉正在生成的)
+            const historyMessages = currentMessages
+                .filter(m => !m.isStreaming)
+                .map(m => ({
+                    role: m.role as 'user' | 'assistant',
+                    content: m.content,
+                    images: m.images
+                }));
 
             // 流式调用
             await aiService.streamChat(
@@ -168,7 +214,7 @@ export default function AISolver() {
                         );
                     },
                     onComplete: (fullText) => {
-                        chatService.updateMessage(activeSessionId, aiMessage.id, fullText, false);
+                        chatService.updateMessage(activeSessionId, aiMessage.id, fullText, undefined, false);
                         setMessages(prev =>
                             prev.map(m =>
                                 m.id === aiMessage.id
@@ -185,7 +231,8 @@ export default function AISolver() {
                         setMessages(prev => prev.filter(m => m.id !== aiMessage.id));
                     },
                 },
-                abortControllerRef.current
+                abortControllerRef.current,
+                modelParams // 传入参数
             );
         } catch (err) {
             if (err instanceof Error && err.name !== 'AbortError') {
@@ -195,14 +242,102 @@ export default function AISolver() {
             setIsLoading(false);
             abortControllerRef.current = null;
         }
-    }, [inputValue, isLoading, activeSessionId, refreshSessions]);
+    };
+
+    // 发送消息
+    const handleSend = useCallback(async (images?: string[]) => {
+        const hasContent = inputValue.trim() || (images && images.length > 0);
+        if (!hasContent || isLoading || !activeSessionId) return;
+
+        if (!aiService.checkApiConfigured()) {
+            setError('请先在设置中配置 API');
+            return;
+        }
+
+        setError(null);
+        const userContent = inputValue.trim();
+        setInputValue('');
+
+        // 添加用户消息
+        const userMessage = chatService.addMessage(activeSessionId, 'user', userContent, images || []);
+        const newMessages = [...messages, userMessage];
+        setMessages(newMessages);
+
+        // 执行生成
+        await executeChat(newMessages, userMessage);
+
+    }, [inputValue, isLoading, activeSessionId, messages, modelParams]);
+
+    // 删除消息
+    const handleDeleteMessage = useCallback((id: string) => {
+        if (!activeSessionId) return;
+        chatService.deleteMessage(activeSessionId, id);
+        setMessages(prev => prev.filter(m => m.id !== id));
+        refreshSessions();
+    }, [activeSessionId, refreshSessions]);
+
+    // 编辑消息并重新发送
+    const handleEditMessage = useCallback(async (id: string, newContent: string) => {
+        if (!activeSessionId || isLoading) return;
+
+        // 1. 找到要编辑的消息索引
+        const index = messages.findIndex(m => m.id === id);
+        if (index === -1) return;
+
+        // 2. 截断消息：保留到该消息之前的所有消息
+        const keptMessages = messages.slice(0, index);
+
+        // 3. 删除后续所有消息（包括被编辑的这条，稍后重新添加）
+        // 实际上我们应该更新数据库(localStorage)中的状态
+        const messagesToDelete = messages.slice(index);
+        messagesToDelete.forEach(m => chatService.deleteMessage(activeSessionId, m.id));
+
+        // 4. 作为新消息重新添加并发送
+        // 保持原有的图片附件
+        const originalMsg = messages[index];
+        const userMessage = chatService.addMessage(activeSessionId, 'user', newContent, originalMsg.images || []);
+
+        const newMessages = [...keptMessages, userMessage];
+        setMessages(newMessages);
+
+        // 5. 触发生成
+        await executeChat(newMessages, userMessage);
+
+    }, [activeSessionId, isLoading, messages, modelParams]);
+
+    // 重新生成
+    const handleRegenerate = useCallback(async (id: string) => {
+        if (!activeSessionId || isLoading) return;
+
+        // 1. 找到 AI 回复的消息索引
+        const index = messages.findIndex(m => m.id === id);
+        if (index === -1) return;
+
+        // 2. 找到对应的上一条用户消息
+        // 如果是 assistant 消息，则保留到它之前的所有消息
+        const keptMessages = messages.slice(0, index);
+
+        // 3. 删除当前 AI 消息及之后的所有消息
+        const messagesToDelete = messages.slice(index);
+        messagesToDelete.forEach(m => chatService.deleteMessage(activeSessionId, m.id));
+
+        // 4. 重设 UI 状态
+        setMessages(keptMessages);
+
+        // 5. 触发生成 (不需要 userMsg 参数，因为已经包含在 keptMessages 的最后一条了，但 executeChat 需要它作为上下文 anchor，这里我们稍微调整逻辑)
+        // 我们的 executeChat 设计是接受 context 和 currentUserMsg。
+        // 这里上下文就是 keptMessages，触发者是 keptMessages 的最后一条
+        const lastUserMsg = keptMessages[keptMessages.length - 1];
+        if (lastUserMsg && lastUserMsg.role === 'user') {
+            await executeChat(keptMessages, lastUserMsg);
+        }
+
+    }, [activeSessionId, isLoading, messages, modelParams]);
 
     // 停止生成
     const handleStop = useCallback(() => {
         abortControllerRef.current?.abort();
         setIsLoading(false);
-
-        // 更新最后一条消息状态
         setMessages(prev =>
             prev.map((m, i) =>
                 i === prev.length - 1 && m.isStreaming
@@ -212,15 +347,14 @@ export default function AISolver() {
         );
     }, []);
 
-    // 获取当前提示词信息
     const promptInfo = getActivePromptInfo();
     const apiInfo = aiService.getCurrentApiInfo();
 
     return (
-        <div className="h-full flex flex-col">
+        <div className="h-screen flex flex-col overflow-hidden bg-[var(--md-surface)]">
             {/* 顶部栏 */}
             <header
-                className="h-14 px-4 flex items-center justify-between shrink-0"
+                className="h-14 px-4 flex items-center justify-between shrink-0 z-20 relative"
                 style={{
                     backgroundColor: 'var(--md-surface-container)',
                     borderBottom: '1px solid var(--md-outline-variant)',
@@ -235,16 +369,10 @@ export default function AISolver() {
                         <History className="w-5 h-5" />
                     </button>
                     <div>
-                        <h1
-                            className="font-medium"
-                            style={{ color: 'var(--md-on-surface)' }}
-                        >
+                        <h1 className="font-medium" style={{ color: 'var(--md-on-surface)' }}>
                             AI 助手
                         </h1>
-                        <p
-                            className="text-xs"
-                            style={{ color: 'var(--md-on-surface-variant)' }}
-                        >
+                        <p className="text-xs" style={{ color: 'var(--md-on-surface-variant)' }}>
                             {promptInfo.name}
                         </p>
                     </div>
@@ -252,16 +380,43 @@ export default function AISolver() {
 
                 <div className="flex items-center gap-2">
                     {apiInfo && (
-                        <span
-                            className="text-xs px-2 py-1 shape-full"
-                            style={{
-                                backgroundColor: 'var(--md-secondary-container)',
-                                color: 'var(--md-on-secondary-container)',
-                            }}
-                        >
-                            {apiInfo.model}
-                        </span>
+                        <div className="hidden sm:flex items-center gap-2">
+                            <span
+                                className="text-xs px-2 py-1 shape-full"
+                                style={{
+                                    backgroundColor: 'var(--md-secondary-container)',
+                                    color: 'var(--md-on-secondary-container)',
+                                }}
+                            >
+                                {apiInfo.model}
+                            </span>
+                        </div>
                     )}
+
+                    {/* 参数设置按钮 */}
+                    <div className="relative" ref={configPanelRef}>
+                        <button
+                            onClick={() => setShowConfig(!showConfig)}
+                            className={`p-2 shape-full state-layer transition-colors ${showConfig ? 'bg-[var(--md-secondary-container)]' : ''}`}
+                            style={{ color: showConfig ? 'var(--md-on-secondary-container)' : 'var(--md-on-surface-variant)' }}
+                            title="模型参数"
+                        >
+                            <Settings2 className="w-5 h-5" />
+                        </button>
+
+                        {/* 参数面板 Popover */}
+                        {showConfig && (
+                            <div className="absolute right-0 top-full mt-2 w-72 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
+                                <ModelConfigPanel
+                                    temperature={modelParams.temperature}
+                                    topP={modelParams.top_p}
+                                    onChange={setModelParams}
+                                    className="shadow-xl"
+                                />
+                            </div>
+                        )}
+                    </div>
+
                     <button
                         onClick={handleNewSession}
                         className="p-2 shape-full state-layer"
@@ -273,8 +428,8 @@ export default function AISolver() {
                 </div>
             </header>
 
-            <div className="flex-1 flex overflow-hidden">
-                {/* 会话侧边栏 (移动端) */}
+            <div className="flex-1 flex overflow-hidden relative">
+                {/* 会话侧边栏 */}
                 {showSidebar && (
                     <div
                         className="fixed inset-0 z-40 lg:hidden"
@@ -287,17 +442,8 @@ export default function AISolver() {
                             onClick={e => e.stopPropagation()}
                         >
                             <div className="flex items-center justify-between mb-4">
-                                <h2
-                                    className="font-medium"
-                                    style={{ color: 'var(--md-on-surface)' }}
-                                >
-                                    对话历史
-                                </h2>
-                                <button
-                                    onClick={() => setShowSidebar(false)}
-                                    className="p-2 shape-full"
-                                    style={{ color: 'var(--md-on-surface-variant)' }}
-                                >
+                                <h2 className="font-medium" style={{ color: 'var(--md-on-surface)' }}>对话历史</h2>
+                                <button onClick={() => setShowSidebar(false)} className="p-2 shape-full" style={{ color: 'var(--md-on-surface-variant)' }}>
                                     <X className="w-5 h-5" />
                                 </button>
                             </div>
@@ -311,7 +457,6 @@ export default function AISolver() {
                     </div>
                 )}
 
-                {/* 会话侧边栏 (桌面端) */}
                 <aside
                     className="hidden lg:block w-64 p-4 shrink-0 overflow-y-auto"
                     style={{
@@ -319,12 +464,7 @@ export default function AISolver() {
                         borderRight: '1px solid var(--md-outline-variant)',
                     }}
                 >
-                    <h2
-                        className="font-medium mb-4"
-                        style={{ color: 'var(--md-on-surface)' }}
-                    >
-                        对话历史
-                    </h2>
+                    <h2 className="font-medium mb-4" style={{ color: 'var(--md-on-surface)' }}>对话历史</h2>
                     <SessionList
                         sessions={sessions}
                         activeId={activeSessionId}
@@ -334,106 +474,72 @@ export default function AISolver() {
                 </aside>
 
                 {/* 主聊天区域 */}
-                <main className="flex-1 flex flex-col overflow-hidden">
+                <main className="flex-1 flex flex-col min-w-0 bg-[var(--md-surface)] relative">
                     {/* 错误提示 */}
                     {error && (
-                        <div
-                            className="mx-4 mt-4 p-3 shape-lg flex items-center gap-2"
-                            style={{
-                                backgroundColor: 'var(--md-error-container)',
-                                color: 'var(--md-on-error-container)',
-                            }}
-                        >
+                        <div className="absolute top-4 left-4 right-4 z-30 p-3 shape-lg flex items-center gap-2 animate-in slide-in-from-top-2"
+                            style={{ backgroundColor: 'var(--md-error-container)', color: 'var(--md-on-error-container)' }}>
                             <AlertCircle className="w-5 h-5 shrink-0" />
                             <span className="text-sm flex-1">{error}</span>
-                            <button onClick={() => setError(null)}>
-                                <X className="w-4 h-4" />
-                            </button>
+                            <button onClick={() => setError(null)}><X className="w-4 h-4" /></button>
                         </div>
                     )}
 
-                    {/* 消息列表 */}
-                    <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                    {/* 消息列表 - 确保 flex-1 和 overflow-y-auto */}
+                    <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4 space-y-4 scroll-smooth">
                         {messages.length === 0 ? (
                             <EmptyState onStart={() => setInputValue('请帮我解答一道数学题')} />
                         ) : (
                             messages.map(message => (
-                                <ChatMessage key={message.id} message={message} />
+                                <ChatMessage
+                                    key={message.id}
+                                    message={message}
+                                    onDelete={handleDeleteMessage}
+                                    onEdit={handleEditMessage}
+                                    onRegenerate={handleRegenerate}
+                                />
                             ))
                         )}
-                        <div ref={messagesEndRef} />
+                        <div ref={messagesEndRef} className="h-4" />
                     </div>
 
-                    {/* 输入框 */}
-                    <ChatInput
-                        value={inputValue}
-                        onChange={setInputValue}
-                        onSend={handleSend}
-                        onStop={handleStop}
-                        isLoading={isLoading}
-                        disabled={!aiService.checkApiConfigured()}
-                        placeholder={
-                            aiService.checkApiConfigured()
-                                ? '输入问题，按 Enter 发送...'
-                                : '请先在设置中配置 API'
-                        }
-                    />
+                    {/* 输入框区域 - 固定在底部 */}
+                    <div className="shrink-0 z-20">
+                        <ChatInput
+                            value={inputValue}
+                            onChange={setInputValue}
+                            onSend={handleSend}
+                            onStop={handleStop}
+                            isLoading={isLoading}
+                            disabled={!aiService.checkApiConfigured()}
+                            placeholder={aiService.checkApiConfigured() ? '输入问题，按 Enter 发送...' : '请先在设置中配置 API'}
+                        />
+                    </div>
                 </main>
             </div>
         </div>
     );
 }
 
-// 会话列表组件
-function SessionList({
-    sessions,
-    activeId,
-    onSelect,
-    onDelete
-}: {
-    sessions: chatService.ChatSession[];
-    activeId: string | null;
-    onSelect: (id: string) => void;
-    onDelete: (id: string) => void;
-}) {
+// ... unchanged sub-components (SessionList, EmptyState) ...
+function SessionList({ sessions, activeId, onSelect, onDelete }: { sessions: chatService.ChatSession[]; activeId: string | null; onSelect: (id: string) => void; onDelete: (id: string) => void; }) {
     return (
         <div className="space-y-1">
             {sessions.map(session => (
                 <div
                     key={session.id}
                     className={`flex items-center gap-2 p-3 shape-lg cursor-pointer group transition-all`}
-                    style={{
-                        backgroundColor: session.id === activeId
-                            ? 'var(--md-secondary-container)'
-                            : 'transparent',
-                    }}
+                    style={{ backgroundColor: session.id === activeId ? 'var(--md-secondary-container)' : 'transparent' }}
                     onClick={() => onSelect(session.id)}
                 >
                     <div className="flex-1 min-w-0">
-                        <p
-                            className="text-sm font-medium truncate"
-                            style={{
-                                color: session.id === activeId
-                                    ? 'var(--md-on-secondary-container)'
-                                    : 'var(--md-on-surface)',
-                            }}
-                        >
-                            {session.title}
-                        </p>
-                        <p
-                            className="text-xs truncate"
-                            style={{ color: 'var(--md-on-surface-variant)' }}
-                        >
-                            {session.messages.length} 条消息
-                        </p>
+                        <p className="text-sm font-medium truncate" style={{ color: session.id === activeId ? 'var(--md-on-secondary-container)' : 'var(--md-on-surface)' }}>{session.title}</p>
+                        <p className="text-xs truncate" style={{ color: 'var(--md-on-surface-variant)' }}>{session.messages.length} 条消息</p>
                     </div>
                     <button
                         className="p-1.5 shape-full opacity-0 group-hover:opacity-100 transition-opacity"
                         style={{ color: 'var(--md-error)' }}
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            onDelete(session.id);
-                        }}
+                        onClick={(e) => { e.stopPropagation(); onDelete(session.id); }}
                     >
                         <Trash2 className="w-4 h-4" />
                     </button>
@@ -443,47 +549,21 @@ function SessionList({
     );
 }
 
-// 空状态组件
 function EmptyState({ onStart }: { onStart: () => void }) {
     const { getGradientStyle } = useTheme();
-    const suggestions = [
-        '请帮我解答一道数学题',
-        '帮我复习物理公式',
-        '写一份学习计划',
-        '解释一下什么是导数',
-    ];
+    const suggestions = ['请帮我解答一道数学题', '帮我复习物理公式', '写一份学习计划', '解释一下什么是导数'];
 
     return (
         <div className="h-full flex flex-col items-center justify-center text-center px-4">
-            <div
-                className="w-20 h-20 shape-xl flex items-center justify-center mb-6"
-                style={getGradientStyle()}
-            >
+            <div className="w-20 h-20 shape-xl flex items-center justify-center mb-6" style={getGradientStyle()}>
                 <MessageSquarePlus className="w-10 h-10 text-white" />
             </div>
-            <h2
-                className="text-xl font-medium mb-2"
-                style={{ color: 'var(--md-on-surface)' }}
-            >
-                开始新对话
-            </h2>
-            <p
-                className="mb-6 max-w-md"
-                style={{ color: 'var(--md-on-surface-variant)' }}
-            >
-                我是你的 AI 学习助手，可以帮你解答问题、批改作业、制定学习计划
-            </p>
+            <h2 className="text-xl font-medium mb-2" style={{ color: 'var(--md-on-surface)' }}>开始新对话</h2>
+            <p className="mb-6 max-w-md" style={{ color: 'var(--md-on-surface-variant)' }}>我是你的 AI 学习助手，可以帮你解答问题、批改作业、制定学习计划</p>
             <div className="flex flex-wrap justify-center gap-2">
                 {suggestions.map((text, i) => (
-                    <button
-                        key={i}
-                        onClick={() => onStart()}
-                        className="px-4 py-2 shape-full text-sm state-layer"
-                        style={{
-                            backgroundColor: 'var(--md-surface-container-highest)',
-                            color: 'var(--md-on-surface)',
-                        }}
-                    >
+                    <button key={i} onClick={() => onStart()} className="px-4 py-2 shape-full text-sm state-layer"
+                        style={{ backgroundColor: 'var(--md-surface-container-highest)', color: 'var(--md-on-surface)' }}>
                         {text}
                     </button>
                 ))}

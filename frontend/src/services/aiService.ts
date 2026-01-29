@@ -14,31 +14,12 @@ export interface ChatMessage {
     images?: string[]; // base64 images
 }
 
+export interface GenerationOptions {
+    temperature?: number;
+    top_p?: number;
+}
+
 // ... unchanged imports and interfaces ...
-
-export interface StreamCallbacks {
-    onStart?: () => void;
-    onToken?: (token: string) => void;
-    onComplete?: (fullText: string) => void;
-    onError?: (error: Error) => void;
-}
-
-/**
- * 检查 API 是否已配置
- */
-export function checkApiConfigured(): boolean {
-    const api = getActiveLlmApi();
-    return api !== null && !!api.apiKey && !!api.baseUrl;
-}
-
-/**
- * 获取当前 API 配置信息
- */
-export function getCurrentApiInfo(): { name: string; model: string } | null {
-    const api = getActiveLlmApi();
-    if (!api) return null;
-    return { name: api.name, model: api.model };
-}
 
 /**
  * 构建请求体（OpenAI 格式）
@@ -46,7 +27,8 @@ export function getCurrentApiInfo(): { name: string; model: string } | null {
 function buildOpenAIRequestBody(
     messages: ChatMessage[],
     model: string,
-    stream: boolean = true
+    stream: boolean = true,
+    options?: GenerationOptions
 ): object {
     const formattedMessages = messages.map(m => {
         if (m.role === 'user' && m.images && m.images.length > 0) {
@@ -73,7 +55,8 @@ function buildOpenAIRequestBody(
         model,
         messages: formattedMessages,
         stream,
-        temperature: 0.7,
+        temperature: options?.temperature ?? 0.7,
+        top_p: options?.top_p ?? 1.0,
         max_tokens: 4096,
     };
 }
@@ -84,7 +67,8 @@ function buildOpenAIRequestBody(
 function buildAnthropicRequestBody(
     messages: ChatMessage[],
     model: string,
-    stream: boolean = true
+    stream: boolean = true,
+    options?: GenerationOptions
 ): object {
     // 提取 system message
     const systemMessage = messages.find(m => m.role === 'system');
@@ -128,6 +112,8 @@ function buildAnthropicRequestBody(
         messages: formattedMessages,
         stream,
         max_tokens: 4096,
+        temperature: options?.temperature ?? 0.7,
+        top_p: options?.top_p ?? 1.0,
     };
 }
 
@@ -197,10 +183,39 @@ async function sendProxyRequest(
 /**
  * 发送聊天请求（流式）
  */
+
+export interface StreamCallbacks {
+    onStart?: () => void;
+    onToken?: (token: string) => void;
+    onComplete?: (fullText: string) => void;
+    onError?: (error: Error) => void;
+}
+
+/**
+ * 检查 API 是否已配置
+ */
+export function checkApiConfigured(): boolean {
+    const api = getActiveLlmApi();
+    return api !== null && !!api.apiKey && !!api.baseUrl;
+}
+
+/**
+ * 获取当前 API 配置信息
+ */
+export function getCurrentApiInfo(): { name: string; model: string } | null {
+    const api = getActiveLlmApi();
+    if (!api) return null;
+    return { name: api.name, model: api.model };
+}
+
+/**
+ * 发送聊天请求（流式）
+ */
 export async function streamChat(
     userMessages: ChatMessage[],
     callbacks: StreamCallbacks,
-    abortController?: AbortController
+    abortController?: AbortController,
+    options?: GenerationOptions
 ): Promise<string> {
     const api = getActiveLlmApi();
     if (!api) {
@@ -217,8 +232,8 @@ export async function streamChat(
     // 根据 API 格式构建请求
     const isAnthropic = api.format === 'anthropic';
     const body = isAnthropic
-        ? buildAnthropicRequestBody(messages, api.model, true)
-        : buildOpenAIRequestBody(messages, api.model, true);
+        ? buildAnthropicRequestBody(messages, api.model, true, options)
+        : buildOpenAIRequestBody(messages, api.model, true, options);
 
     // 构建目标 URL
     let targetUrl = api.baseUrl;
