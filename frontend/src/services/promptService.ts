@@ -1,8 +1,19 @@
 import api from '@/lib/axios';
+import * as settingsService from './settingsService';
 
 export interface PromptSettings {
     scaffoldingMode: 'rush' | 'balanced' | 'socratic';
     persona: 'senior' | 'professor' | 'friend';
+    promptMode?: 'composed' | 'custom';
+    activePromptId?: string;
+    customPromptSnippet?: string;
+}
+
+export interface SavedPrompt {
+    id: string;
+    name: string;
+    content: string;
+    createdAt: number;
 }
 
 const TUTOR_SYSTEM_PROMPT = `# Role
@@ -37,11 +48,35 @@ const PERSONA_SNIPPETS: Record<PromptSettings['persona'], string> = {
 /**
  * 组装基础系统提示词
  */
-function buildBasePrompt(settings: PromptSettings): string {
+export function buildSystemPrompt(settings: any): string {
+    if (settings.promptMode === 'custom') {
+        const prompts = getSavedPrompts();
+        const active = prompts.find(p => p.id === settings.activePromptId);
+        return active?.content || '你是 EduAI 金牌辅导员。';
+    }
+
     let prompt = TUTOR_SYSTEM_PROMPT;
-    prompt += SCAFFOLDING_SNIPPETS[settings.scaffoldingMode];
-    prompt += PERSONA_SNIPPETS[settings.persona];
+    if (settings.scaffoldingMode && SCAFFOLDING_SNIPPETS[settings.scaffoldingMode as keyof typeof SCAFFOLDING_SNIPPETS]) {
+        prompt += SCAFFOLDING_SNIPPETS[settings.scaffoldingMode as keyof typeof SCAFFOLDING_SNIPPETS];
+    } else {
+        prompt += SCAFFOLDING_SNIPPETS['balanced'];
+    }
+
+    if (settings.persona && PERSONA_SNIPPETS[settings.persona as keyof typeof PERSONA_SNIPPETS]) {
+        prompt += PERSONA_SNIPPETS[settings.persona as keyof typeof PERSONA_SNIPPETS];
+    } else {
+        prompt += PERSONA_SNIPPETS['senior'];
+    }
+
+    if (settings.customPromptSnippet) {
+        prompt += `\n\n# 用户附加的自定义底层约束\n${settings.customPromptSnippet}`;
+    }
+
     return prompt;
+}
+
+function buildBasePrompt(settings: PromptSettings): string {
+    return buildSystemPrompt(settings);
 }
 
 /**
@@ -89,4 +124,51 @@ export async function generateSystemMessage(settings: PromptSettings, username?:
         role: 'system',
         content: compiled
     };
+}
+
+// ============ Custom Prompts Management ============ //
+function getPromptsKey(): string {
+    const userId = settingsService.getCurrentUserId();
+    return userId ? `eduaihub_custom_prompts_${userId}` : 'eduaihub_custom_prompts_guest';
+}
+
+export function getSavedPrompts(): SavedPrompt[] {
+    try {
+        const stored = localStorage.getItem(getPromptsKey());
+        return stored ? JSON.parse(stored) : [];
+    } catch {
+        return [];
+    }
+}
+
+export function saveCustomPrompt(name: string, content: string): SavedPrompt {
+    const prompts = getSavedPrompts();
+    const newPrompt: SavedPrompt = {
+        id: `prompt_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        name,
+        content,
+        createdAt: Date.now(),
+    };
+    prompts.push(newPrompt);
+    localStorage.setItem(getPromptsKey(), JSON.stringify(prompts));
+    return newPrompt;
+}
+
+export function updateCustomPrompt(id: string, updates: Partial<SavedPrompt>): SavedPrompt | null {
+    const prompts = getSavedPrompts();
+    const index = prompts.findIndex(p => p.id === id);
+    if (index === -1) return null;
+
+    prompts[index] = { ...prompts[index], ...updates };
+    localStorage.setItem(getPromptsKey(), JSON.stringify(prompts));
+    return prompts[index];
+}
+
+export function deleteCustomPrompt(id: string): boolean {
+    const prompts = getSavedPrompts();
+    const filtered = prompts.filter(p => p.id !== id);
+    if (filtered.length === prompts.length) return false;
+
+    localStorage.setItem(getPromptsKey(), JSON.stringify(filtered));
+    return true;
 }
