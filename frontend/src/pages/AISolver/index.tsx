@@ -1,7 +1,9 @@
 import { useRef, useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Bot, User, Sparkles, Loader2, Paperclip } from 'lucide-react';
+import { Send, Bot, User, Sparkles, Loader2, Paperclip, Settings2, ChevronDown, Cpu, Key, Globe } from 'lucide-react';
 import api from '@/lib/axios';
+import { useAuth } from '@/contexts/AuthContext';
+import { generateSystemMessage, PromptSettings } from '@/services/promptService';
 
 interface Message {
     id: string;
@@ -9,13 +11,47 @@ interface Message {
     content: string;
 }
 
+interface LlmConfig {
+    model: string;
+    baseUrl: string;
+    apiKey: string;
+}
+
 export default function AISolverPage() {
+    const { user } = useAuth();
     const [messages, setMessages] = useState<Message[]>([
         { id: '1', role: 'assistant', content: '# 👋 欢迎来到 EduAI 行星解答中心\n\n有什么我可以协助您的数学推导或概念解析吗？我随时准备响应。' }
     ]);
     const [input, setInput] = useState('');
     const [isReceiving, setIsReceiving] = useState(false);
+    const [showSettings, setShowSettings] = useState(false);
+    const [promptOpts, setPromptOpts] = useState<PromptSettings>({
+        scaffoldingMode: 'balanced',
+        persona: 'senior'
+    });
+
+    // 大模型配置
+    const [llmConfig, setLlmConfig] = useState<LlmConfig>({
+        model: 'gpt-4o-mini',
+        baseUrl: '',
+        apiKey: ''
+    });
+    const [showLlmSettings, setShowLlmSettings] = useState(false);
+
     const scrollRef = useRef<HTMLDivElement>(null);
+
+    // Initial load
+    useEffect(() => {
+        const stored = localStorage.getItem('eduaihub_llm_settings');
+        if (stored) {
+            try { setLlmConfig(JSON.parse(stored)); } catch (e) { }
+        }
+    }, []);
+
+    // Save on config change
+    useEffect(() => {
+        localStorage.setItem('eduaihub_llm_settings', JSON.stringify(llmConfig));
+    }, [llmConfig]);
 
     useEffect(() => {
         if (scrollRef.current) {
@@ -35,7 +71,12 @@ export default function AISolverPage() {
         setMessages(prev => [...prev, { id: botMsgId, role: 'assistant', content: '' }]);
 
         try {
-            const chatHistory = messages.map(m => ({ role: m.role, content: m.content })).concat({ role: 'user', content: newMsg.content });
+            // 在发往大模型前，静默生成当前最新状态的 System 指令
+            const systemMsg = await generateSystemMessage(promptOpts, user?.username);
+            const chatHistory = [systemMsg].concat(
+                messages.map(m => ({ role: m.role, content: m.content }))
+            ).concat({ role: 'user', content: newMsg.content });
+
             // 获取当前用户 Token 用于流式请求
             const token = localStorage.getItem('eduaihub_token');
 
@@ -43,10 +84,12 @@ export default function AISolverPage() {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
+                    'Authorization': `Bearer ${token}`,
+                    ...(llmConfig.apiKey ? { 'x-provider-key': llmConfig.apiKey } : {}),
+                    ...(llmConfig.baseUrl ? { 'x-provider-baseurl': llmConfig.baseUrl } : {})
                 },
                 body: JSON.stringify({
-                    model: "gpt-4o-mini", // Or whatever model in backend
+                    model: llmConfig.model || "gpt-4o-mini",
                     messages: chatHistory,
                     stream: true
                 })
@@ -110,9 +153,115 @@ export default function AISolverPage() {
                         </div>
                     </div>
 
-                    <button className="px-4 py-2 rounded-xl bg-white/50 hover:bg-white dark:bg-slate-800/50 dark:hover:bg-slate-800 transition-all font-semibold text-sm flex items-center gap-2 shadow-sm border border-slate-200 dark:border-slate-700">
-                        <Sparkles className="w-4 h-4 text-amber-500" /> 新思维导图
-                    </button>
+                    <div className="flex gap-2 relative">
+                        {/* LLM Provider Settings */}
+                        <div className="relative">
+                            <button
+                                onClick={() => { setShowLlmSettings(!showLlmSettings); setShowSettings(false); }}
+                                className="px-4 py-2 rounded-xl bg-white/50 hover:bg-white dark:bg-slate-800/50 dark:hover:bg-slate-800 transition-all font-semibold text-sm flex items-center gap-2 shadow-sm border border-slate-200 dark:border-slate-700"
+                            >
+                                <Cpu className="w-4 h-4 text-emerald-500" />
+                                <span className="max-w-[80px] truncate">{llmConfig.model}</span>
+                                <ChevronDown className={`w-4 h-4 transition-transform ${showLlmSettings ? 'rotate-180' : ''}`} />
+                            </button>
+                            <AnimatePresence>
+                                {showLlmSettings && (
+                                    <motion.div
+                                        initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                                        exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                                        className="absolute right-0 top-12 w-80 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-white/50 dark:border-slate-700/50 shadow-2xl rounded-2xl p-5 z-50 text-sm"
+                                    >
+                                        <h3 className="font-bold text-slate-800 dark:text-slate-200 mb-4 flex items-center gap-2"><Globe className="w-4 h-4 text-blue-500" />网关与模型直连 (BYOK)</h3>
+                                        <div className="space-y-4">
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">模型名称 (Model)</label>
+                                                <input
+                                                    type="text" value={llmConfig.model}
+                                                    onChange={e => setLlmConfig({ ...llmConfig, model: e.target.value })}
+                                                    className="w-full bg-slate-100 dark:bg-slate-800 border-none rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500 font-medium"
+                                                    placeholder="gpt-4o / deepseek-chat"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">自定义端点 (Base URL)</label>
+                                                <input
+                                                    type="text" value={llmConfig.baseUrl}
+                                                    onChange={e => setLlmConfig({ ...llmConfig, baseUrl: e.target.value })}
+                                                    className="w-full bg-slate-100 dark:bg-slate-800 border-none rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500 font-medium"
+                                                    placeholder="选填不填走后端默认"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">API Key</label>
+                                                <div className="relative">
+                                                    <Key className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                                                    <input
+                                                        type="password" value={llmConfig.apiKey}
+                                                        onChange={e => setLlmConfig({ ...llmConfig, apiKey: e.target.value })}
+                                                        className="w-full bg-slate-100 dark:bg-slate-800 border-none rounded-lg pl-9 pr-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500 font-medium"
+                                                        placeholder="sk-..."
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </motion.div>
+                                )}
+                            </AnimatePresence>
+                        </div>
+
+                        <button
+                            onClick={() => { setShowSettings(!showSettings); setShowLlmSettings(false); }}
+                            className="px-4 py-2 rounded-xl bg-white/50 hover:bg-white dark:bg-slate-800/50 dark:hover:bg-slate-800 transition-all font-semibold text-sm flex items-center gap-2 shadow-sm border border-slate-200 dark:border-slate-700"
+                        >
+                            <Settings2 className="w-4 h-4 text-indigo-500" /> 教学模式
+                            <ChevronDown className={`w-4 h-4 transition-transform ${showSettings ? 'rotate-180' : ''}`} />
+                        </button>
+                        <button className="px-4 py-2 rounded-xl bg-white/50 hover:bg-white dark:bg-slate-800/50 dark:hover:bg-slate-800 transition-all font-semibold text-sm flex items-center gap-2 shadow-sm border border-slate-200 dark:border-slate-700">
+                            <Sparkles className="w-4 h-4 text-amber-500" /> 新思维导图
+                        </button>
+
+                        {/* Settings Dropdown */}
+                        <AnimatePresence>
+                            {showSettings && (
+                                <motion.div
+                                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                                    className="absolute right-0 top-12 w-80 bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl border border-white/50 dark:border-slate-700/50 shadow-2xl rounded-2xl p-5 z-50 text-sm"
+                                >
+                                    <div className="mb-5">
+                                        <label className="block font-bold text-slate-700 dark:text-slate-300 mb-3">引导模式 (Scaffolding)</label>
+                                        <div className="grid grid-cols-3 gap-2">
+                                            {(['rush', 'balanced', 'socratic'] as const).map(mode => (
+                                                <button
+                                                    key={mode}
+                                                    onClick={() => setPromptOpts(prev => ({ ...prev, scaffoldingMode: mode }))}
+                                                    className={`py-2 px-1 rounded-lg font-bold transition-all ${promptOpts.scaffoldingMode === mode ? 'bg-indigo-500 text-white shadow-md shadow-indigo-500/30' : 'bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700'}`}
+                                                >
+                                                    {mode === 'rush' ? '直接解' : mode === 'balanced' ? '平衡' : '启发式'}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block font-bold text-slate-700 dark:text-slate-300 mb-3">助教人设 (Persona)</label>
+                                        <div className="grid grid-cols-3 gap-2">
+                                            {(['senior', 'professor', 'friend'] as const).map(p => (
+                                                <button
+                                                    key={p}
+                                                    onClick={() => setPromptOpts(prev => ({ ...prev, persona: p }))}
+                                                    className={`py-2 px-1 rounded-lg font-bold transition-all ${promptOpts.persona === p ? 'bg-purple-500 text-white shadow-md shadow-purple-500/30' : 'bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700'}`}
+                                                >
+                                                    {p === 'senior' ? '学姐' : p === 'professor' ? '严苛教授' : '同桌'}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </motion.div>
+                            )}
+                        </AnimatePresence>
+                    </div>
                 </div>
 
                 {/* Chat Area */}

@@ -1,9 +1,14 @@
 import { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { BookOpen, Target, Clock, Calendar, Check, LogOut, Sun, Moon } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { BookOpen, Target, Clock, Calendar, Check, LogOut, Sun, Moon, X } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import api from '@/lib/axios';
+import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core';
+import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import confetti from 'canvas-confetti';
+import { Link } from 'react-router-dom';
 
 // TypeScript Interfaces
 interface Course {
@@ -25,6 +30,42 @@ interface FocusTask {
     color: string;
 }
 
+// 可拖放的任务子项组件
+function SortableTaskItem({ task, onComplete }: { task: FocusTask, onComplete: (id: number) => void }) {
+    const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
+    const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 };
+
+    return (
+        <div
+            ref={setNodeRef} style={style}
+            className={`group relative p-4 rounded-3xl border transition-all duration-300 flex items-center gap-4 
+        ${task.completed ? 'bg-slate-50/50 dark:bg-slate-800/20 border-transparent grayscale opacity-60' : 'bg-white/60 dark:bg-slate-800/60 border-white/50 dark:border-white/10 shadow-sm hover:shadow-md hover:bg-white dark:hover:bg-slate-800 hover:-translate-y-1'}`}
+        >
+            <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 px-1">
+                <div className="w-1 h-4 border-l-2 border-r-2 border-current rounded-sm opacity-50"></div>
+            </div>
+            <div className="w-1.5 h-12 rounded-full shrink-0" style={{ backgroundColor: task.color }} />
+            <div className="flex-1 min-w-0 py-1">
+                <p className={`font-bold truncate text-base ${task.completed ? 'line-through' : ''}`}>
+                    {task.title}
+                </p>
+                <p className="text-xs font-semibold text-slate-500 mt-1 flex items-center gap-1.5">
+                    <Clock className="w-3 h-3" />
+                    {task.start_time} - {task.duration}m
+                </p>
+            </div>
+            {!task.completed && (
+                <button
+                    onClick={() => onComplete(task.id)}
+                    className="w-10 h-10 rounded-2xl flex items-center justify-center bg-green-50 dark:bg-green-900/30 text-green-600 dark:text-green-400 opacity-0 group-hover:opacity-100 transition-all hover:scale-110 hover:bg-green-100"
+                >
+                    <Check className="w-5 h-5 stroke-[3]" />
+                </button>
+            )}
+        </div>
+    );
+}
+
 // Animation Variants
 const containerVariant = {
     hidden: { opacity: 0 },
@@ -42,6 +83,15 @@ export default function DashboardPage() {
     const [courses, setCourses] = useState<Course[]>([]);
     const [tasks, setTasks] = useState<FocusTask[]>([]);
     const [isRefreshing, setIsRefreshing] = useState(false);
+
+    // 模态框控制状态
+    const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+    const [newTask, setNewTask] = useState({
+        title: '',
+        duration: 30,
+        start_time: '09:00',
+        color: '#6366f1'
+    });
 
     // Fetch Data
     const fetchData = async () => {
@@ -64,9 +114,53 @@ export default function DashboardPage() {
         fetchData();
     }, []);
 
+    // 拖拽相关传感器
+    const sensors = useSensors(
+        useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+        useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+    );
+
+    const handleDragEnd = (event: DragEndEvent) => {
+        const { active, over } = event;
+        if (over && active.id !== over.id) {
+            setTasks((items) => {
+                const oldIndex = items.findIndex((t) => t.id === active.id);
+                const newIndex = items.findIndex((t) => t.id === over.id);
+                return arrayMove(items, oldIndex, newIndex);
+            });
+            // 可在此将最终顺序变动发往后端存储
+        }
+    };
+
+    const fireConfetti = () => {
+        confetti({
+            particleCount: 150,
+            spread: 70,
+            origin: { y: 0.6 },
+            colors: ['#6366f1', '#8b5cf6', '#ec4899', '#10b981'],
+            zIndex: 9999
+        });
+    };
+
+    const handleAddTask = async (e: React.FormEvent) => {
+        e.preventDefault();
+        try {
+            await api.post('/study/tasks', {
+                ...newTask,
+                date: new Date().toISOString().split('T')[0]
+            });
+            setIsAddModalOpen(false);
+            setNewTask({ title: '', duration: 30, start_time: '09:00', color: '#6366f1' });
+            fetchData();
+        } catch (error) {
+            console.error(error);
+        }
+    };
+
     const handleCompleteTask = async (id: number) => {
         try {
             await api.patch(`/study/tasks/${id}`, { completed: true });
+            fireConfetti();
             fetchData(); // 重新加载获取最新状态
         } catch (e) {
             console.error(e);
@@ -240,44 +334,110 @@ export default function DashboardPage() {
                                     <p className="font-bold">今日很轻松</p>
                                 </div>
                             ) : (
-                                todayTasks.map((task, i) => (
-                                    <motion.div
-                                        key={task.id}
-                                        initial={{ opacity: 0, y: 10 }}
-                                        animate={{ opacity: 1, y: 0 }}
-                                        transition={{ delay: 0.3 + (i * 0.1) }}
-                                        className={`group relative p-4 rounded-3xl border transition-all duration-300 flex items-center gap-4 
-                          ${task.completed ? 'bg-slate-50/50 dark:bg-slate-800/20 border-transparent grayscale opacity-60' : 'bg-white/60 dark:bg-slate-800/60 border-white/50 dark:border-white/10 shadow-sm hover:shadow-md hover:bg-white dark:hover:bg-slate-800 hover:-translate-y-1'}`}
-                                    >
-                                        <div className="w-1.5 h-12 rounded-full shrink-0" style={{ backgroundColor: task.color }} />
-                                        <div className="flex-1 min-w-0 py-1">
-                                            <p className={`font-bold truncate text-base ${task.completed ? 'line-through' : ''}`}>
-                                                {task.title}
-                                            </p>
-                                            <p className="text-xs font-semibold text-slate-500 mt-1 flex items-center gap-1.5">
-                                                <Clock className="w-3 h-3" />
-                                                {task.start_time} - {task.duration}m
-                                            </p>
-                                        </div>
-                                        {!task.completed && (
-                                            <button
-                                                onClick={() => handleCompleteTask(task.id)}
-                                                className="w-10 h-10 rounded-2xl flex items-center justify-center bg-green-50 dark:bg-green-900/30 text-green-600 dark:text-green-400 opacity-0 group-hover:opacity-100 transition-all hover:scale-110 hover:bg-green-100"
-                                            >
-                                                <Check className="w-5 h-5 stroke-[3]" />
-                                            </button>
-                                        )}
-                                    </motion.div>
-                                ))
+                                <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                                    <SortableContext items={todayTasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
+                                        {todayTasks.map((task) => (
+                                            <SortableTaskItem key={task.id} task={task} onComplete={handleCompleteTask} />
+                                        ))}
+                                    </SortableContext>
+                                </DndContext>
                             )}
                         </div>
 
-                        <button className="btn-premium mt-4 w-full py-4 rounded-2xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-bold tracking-wide shadow-lg flex items-center justify-center gap-2">
-                            <span className="text-xl leading-none">+</span> 添加新日程
-                        </button>
+                        <div className="space-y-3 mt-4">
+                            <button
+                                onClick={() => setIsAddModalOpen(true)}
+                                className="btn-premium w-full py-4 rounded-2xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-bold tracking-wide shadow-lg flex items-center justify-center gap-2"
+                            >
+                                <span className="text-xl leading-none">+</span> 添加新日程
+                            </button>
+                            <Link to="/focus" className="btn-premium w-full py-4 rounded-2xl bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-bold tracking-wide shadow-lg shadow-purple-500/30 flex items-center justify-center gap-2">
+                                <Target className="w-5 h-5" /> 进入沉浸时间轴
+                            </Link>
+                        </div>
                     </motion.div>
                 </div>
             </div>
+
+            {/* 新增日程模态框 */}
+            <AnimatePresence>
+                {isAddModalOpen && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            onClick={() => setIsAddModalOpen(false)}
+                            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+                        />
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                            className="relative w-full max-w-md glass-panel rounded-[2rem] p-8 shadow-2xl border-white/50 dark:border-white/10"
+                        >
+                            <button
+                                onClick={() => setIsAddModalOpen(false)}
+                                className="absolute top-6 right-6 p-2 rounded-full hover:bg-slate-200/50 dark:hover:bg-slate-700/50 transition-colors"
+                            >
+                                <X className="w-5 h-5 text-slate-500" />
+                            </button>
+
+                            <h2 className="text-2xl font-black mb-6 flex items-center gap-2"><Target className="w-6 h-6 text-purple-500" /> 添加新使命</h2>
+                            <form onSubmit={handleAddTask} className="space-y-4">
+                                <div>
+                                    <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">任务名称</label>
+                                    <input
+                                        type="text" required
+                                        value={newTask.title}
+                                        onChange={e => setNewTask({ ...newTask, title: e.target.value })}
+                                        className="w-full bg-white/50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-purple-500 transition-all font-medium"
+                                        placeholder="例如：复习数据结构与算法"
+                                    />
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">开始时间</label>
+                                        <input
+                                            type="time" required
+                                            value={newTask.start_time}
+                                            onChange={e => setNewTask({ ...newTask, start_time: e.target.value })}
+                                            className="w-full bg-white/50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-purple-500 transition-all font-medium appearance-none"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">时长 (分钟)</label>
+                                        <input
+                                            type="number" required min="1" step="1"
+                                            value={newTask.duration}
+                                            onChange={e => setNewTask({ ...newTask, duration: Number(e.target.value) })}
+                                            className="w-full bg-white/50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-purple-500 transition-all font-medium"
+                                        />
+                                    </div>
+                                </div>
+                                <div className="mb-6">
+                                    <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-3">主题色系</label>
+                                    <div className="flex gap-3 justify-center">
+                                        {['#6366f1', '#8b5cf6', '#ec4899', '#f43f5e', '#f59e0b', '#10b981', '#06b6d4'].map(c => (
+                                            <button
+                                                key={c} type="button"
+                                                onClick={() => setNewTask({ ...newTask, color: c })}
+                                                className={`w-8 h-8 rounded-full shadow-sm transition-transform ${newTask.color === c ? 'scale-125 ring-2 ring-offset-2 dark:ring-offset-slate-900 ring-slate-400' : 'hover:scale-110'}`}
+                                                style={{ backgroundColor: c }}
+                                            />
+                                        ))}
+                                    </div>
+                                </div>
+                                <div className="pt-2">
+                                    <button type="submit" className="w-full py-4 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold tracking-wide shadow-lg shadow-purple-500/30 transition-all active:scale-[0.98]">
+                                        确认部署
+                                    </button>
+                                </div>
+                            </form>
+                        </motion.div>
+                    </div>
+                )}
+            </AnimatePresence>
         </div>
     );
 }

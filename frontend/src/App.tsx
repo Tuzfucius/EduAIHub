@@ -7,6 +7,7 @@ import AuthPage from '@/pages/Auth';
 import DashboardPage from '@/pages/Dashboard';
 import AISolverPage from '@/pages/AISolver';
 import MaterialsPage from '@/pages/Materials';
+import FocusPage from '@/pages/Focus';
 
 // Route Guard component
 function RequireAuth({ children }: { children: JSX.Element }) {
@@ -50,7 +51,13 @@ function AppRoutes() {
   return (
     <AnimatePresence mode="wait">
       <Routes location={location} key={location.pathname}>
-        <Route path="/login" element={token ? <Navigate to="/application" replace /> : <PageWrapper><AuthPage /></PageWrapper>} />
+        <Route path="/login" element={token ? <Navigate to="/dashboard" replace /> : <PageWrapper><AuthPage /></PageWrapper>} />
+
+        <Route path="/focus" element={
+          <RequireAuth>
+            <PageWrapper><FocusPage /></PageWrapper>
+          </RequireAuth>
+        } />
 
         <Route
           path="/"
@@ -63,8 +70,8 @@ function AppRoutes() {
           <Route path="dashboard" element={<PageWrapper><DashboardPage /></PageWrapper>} />
           <Route path="solver" element={<PageWrapper><AISolverPage /></PageWrapper>} />
           <Route path="materials" element={<PageWrapper><MaterialsPage /></PageWrapper>} />
-          <Route index element={<Navigate to="dashboard" replace />} />
-          <Route path="application" element={<Navigate to="dashboard" replace />} />
+          <Route index element={<Navigate to="/dashboard" replace />} />
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Route>
       </Routes>
     </AnimatePresence>

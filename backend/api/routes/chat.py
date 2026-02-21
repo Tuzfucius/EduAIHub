@@ -22,10 +22,18 @@ async def chat_completions(
     """
     body = await request.json()
     
-    if not settings.OPENAI_API_KEY:
+    # 获取自带密钥并提供双重兜底 (BYOK)
+    custom_key = request.headers.get("x-provider-key")
+    custom_base_url = request.headers.get("x-provider-baseurl")
+    
+    # 最终采用的 Provider 配置
+    active_key = custom_key if custom_key else settings.OPENAI_API_KEY
+    active_base_url = custom_base_url if custom_base_url else settings.OPENAI_BASE_URL
+    
+    if not active_key:
         # Dummy Response for testing if no key is set
         async def mock_stream():
-            words = ["你好，", "我是", " EduAIHub", " 的", "专属 AI", "。由于未配置后端 API KEY，", "这是", "一段", "模拟的流式输出~"]
+            words = ["你好，", "我是", " EduAIHub", " 的", "专属 AI", "。由于未配置后端 API KEY 且您未提供自定义私钥，", "这是", "一段", "模拟的流式输出~"]
             for w in words:
                 chunk = {"choices": [{"delta": {"content": w}}]}
                 yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
@@ -33,7 +41,7 @@ async def chat_completions(
         return StreamingResponse(mock_stream(), media_type="text/event-stream")
 
     headers = {
-        "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
+        "Authorization": f"Bearer {active_key}",
         "Content-Type": "application/json"
     }
     
@@ -43,9 +51,15 @@ async def chat_completions(
     async def proxy_stream():
         async with httpx.AsyncClient(timeout=60.0) as client:
             try:
+                # 若 BaseURL 结尾没有 /chat/completions，这里应该如何拼装依据上游情况而定
+                # 标准化处理 endpoint
+                endpoint = f"{active_base_url.rstrip('/')}/chat/completions"
+                if "/chat/completions" in active_base_url: 
+                    endpoint = active_base_url # 防止重复拼接
+                    
                 async with client.stream(
                     "POST", 
-                    f"{settings.OPENAI_BASE_URL}/chat/completions",
+                    endpoint,
                     json=body,
                     headers=headers
                 ) as response:
