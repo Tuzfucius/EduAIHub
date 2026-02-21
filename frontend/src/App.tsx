@@ -1,35 +1,86 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { AnimatePresence, motion } from 'framer-motion';
+import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { ThemeProvider } from '@/contexts/ThemeContext';
+import MainLayout from '@/components/MainLayout';
+import AuthPage from '@/pages/Auth';
+import DashboardPage from '@/pages/Dashboard';
+import AISolverPage from '@/pages/AISolver';
+import MaterialsPage from '@/pages/Materials';
 
-function App() {
-  const [count, setCount] = useState(0)
+// Route Guard component
+function RequireAuth({ children }: { children: JSX.Element }) {
+  const { token, isLoading } = useAuth();
+  const location = useLocation();
 
-  return (
-    <>
-      <div>
-        <a href="https://vitejs.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-slate-50 dark:bg-slate-900">
+        <div className="w-16 h-16 border-4 border-purple-500 border-t-transparent rounded-full animate-spin"></div>
       </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.tsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  )
+    );
+  }
+
+  if (!token) {
+    return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+  return children;
 }
 
-export default App
+// Page Transition Wrapper
+function PageWrapper({ children }: { children: React.ReactNode }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, scale: 0.98, filter: "blur(10px)" }}
+      animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
+      exit={{ opacity: 0, scale: 1.02, filter: "blur(10px)" }}
+      transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+      className="w-full h-full"
+    >
+      {children}
+    </motion.div>
+  );
+}
+
+// Main App Router
+function AppRoutes() {
+  const location = useLocation();
+  const { token } = useAuth();
+
+  return (
+    <AnimatePresence mode="wait">
+      <Routes location={location} key={location.pathname}>
+        <Route path="/login" element={token ? <Navigate to="/application" replace /> : <PageWrapper><AuthPage /></PageWrapper>} />
+
+        <Route
+          path="/"
+          element={
+            <RequireAuth>
+              <MainLayout />
+            </RequireAuth>
+          }
+        >
+          <Route path="dashboard" element={<PageWrapper><DashboardPage /></PageWrapper>} />
+          <Route path="solver" element={<PageWrapper><AISolverPage /></PageWrapper>} />
+          <Route path="materials" element={<PageWrapper><MaterialsPage /></PageWrapper>} />
+          <Route index element={<Navigate to="dashboard" replace />} />
+          <Route path="application" element={<Navigate to="dashboard" replace />} />
+        </Route>
+      </Routes>
+    </AnimatePresence>
+  );
+}
+
+export default function App() {
+  return (
+    <ThemeProvider>
+      <AuthProvider>
+        <Router>
+          <div className="min-h-screen w-full bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-200 selection:bg-purple-500/30">
+            <AppRoutes />
+          </div>
+        </Router>
+      </AuthProvider>
+    </ThemeProvider>
+  );
+}
