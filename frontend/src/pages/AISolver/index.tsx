@@ -11,9 +11,10 @@ import {
     Loader2,
     History,
     X,
-    ChevronLeft
+    ChevronLeft,
+    Sparkles
 } from 'lucide-react';
-import { useTheme } from '@/contexts/ThemeContext';
+import { useTheme, THEME_COLORS } from '@/contexts/ThemeContext';
 import { useAuth } from '@/contexts/AuthContext';
 import ChatMessage from './components/ChatMessage';
 import ChatInput from './components/ChatInput';
@@ -22,10 +23,12 @@ import * as chatService from '@/services/chatService';
 import * as aiService from '@/services/aiService';
 import * as settingsService from '@/services/settingsService';
 import { getActivePromptInfo } from '@/services/promptService';
+import { ThemeColor } from '@/config/theme';
 
 export default function AISolver() {
-    const { getGradientStyle } = useTheme();
+    const { isDark, colorTheme, toggleTheme } = useTheme();
     const { user } = useAuth();
+    const themeColor = THEME_COLORS.find(c => c.id === colorTheme) || THEME_COLORS[0];
 
     // 状态
     const [sessions, setSessions] = useState<chatService.ChatSession[]>([]);
@@ -79,10 +82,10 @@ export default function AISolver() {
             const session = chatService.getSession(activeSessionId);
             if (session) {
                 setMessages(session.messages);
-                // 切换会话后滚动到底部
+                // 使用 setTimeout 确保 DOM 完全更新后滚动
                 setTimeout(() => {
-                    messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
-                }, 0);
+                    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                }, 100);
             }
         }
     }, [activeSessionId]);
@@ -287,6 +290,17 @@ export default function AISolver() {
 
         // 添加用户消息
         const userMessage = chatService.addMessage(activeSessionId, 'user', userContent, images || []);
+
+        // 调试日志
+        const totalImageSize = (images || []).reduce((acc, img) => acc + img.length, 0);
+        console.log('[Chat] Sending message:', {
+            sessionId: activeSessionId,
+            hasContent: !!userContent,
+            imageCount: images?.length || 0,
+            totalImageSizeKB: (totalImageSize / 1024).toFixed(1),
+            hasFiles: (files?.length || 0) > 0
+        });
+
         const newMessages = [...messages, userMessage];
         setMessages(newMessages);
 
@@ -378,30 +392,38 @@ export default function AISolver() {
     const apiInfo = aiService.getCurrentApiInfo();
 
     return (
-        <div className="h-screen flex flex-col overflow-hidden bg-[var(--md-surface)]">
-            {/* 顶部栏 */}
+        <div className="h-screen flex flex-col overflow-hidden theme-transition"
+            style={{ backgroundColor: 'var(--md-surface)' }}>
             <header
-                className="h-14 px-4 flex items-center justify-between shrink-0 z-20 relative"
+                className="h-14 px-4 flex items-center justify-between shrink-0 z-20 relative theme-transition"
                 style={{
-                    backgroundColor: 'var(--md-surface-container)',
+                    backgroundColor: isDark ? 'rgba(30,30,30,0.6)' : 'rgba(255,255,255,0.6)',
                     borderBottom: '1px solid var(--md-outline-variant)',
                 }}
             >
                 <div className="flex items-center gap-3">
                     <button
                         onClick={() => setShowSidebar(true)}
-                        className="lg:hidden p-2 shape-full state-layer"
+                        className="lg:hidden p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
                         style={{ color: 'var(--md-on-surface-variant)' }}
                     >
                         <History className="w-5 h-5" />
                     </button>
-                    <div>
-                        <h1 className="font-medium" style={{ color: 'var(--md-on-surface)' }}>
-                            AI 助手
-                        </h1>
-                        <p className="text-xs" style={{ color: 'var(--md-on-surface-variant)' }}>
-                            {promptInfo.name}
-                        </p>
+                    <div className="flex items-center gap-2">
+                        <div
+                            className="w-8 h-8 rounded-lg flex items-center justify-center shadow-md"
+                            style={{ background: `linear-gradient(135deg, ${themeColor.primary} 0%, ${themeColor.dark} 100%)` }}
+                        >
+                            <Sparkles className="w-4 h-4 text-white" />
+                        </div>
+                        <div>
+                            <h1 className="font-semibold text-slate-800 dark:text-white">
+                                AI 助手
+                            </h1>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">
+                                {promptInfo.name}
+                            </p>
+                        </div>
                     </div>
                 </div>
 
@@ -409,10 +431,10 @@ export default function AISolver() {
                     {apiInfo && (
                         <div className="hidden sm:flex items-center gap-2">
                             <span
-                                className="text-xs px-2 py-1 shape-full"
+                                className="text-xs px-3 py-1 rounded-full font-medium"
                                 style={{
-                                    backgroundColor: 'var(--md-secondary-container)',
-                                    color: 'var(--md-on-secondary-container)',
+                                    backgroundColor: `${themeColor.primary}15`,
+                                    color: themeColor.primary,
                                 }}
                             >
                                 {apiInfo.model}
@@ -420,20 +442,24 @@ export default function AISolver() {
                         </div>
                     )}
 
-                    {/* 参数设置按钮 */}
                     <div className="relative" ref={configPanelRef}>
                         <button
                             onClick={() => setShowConfig(!showConfig)}
-                            className={`p-2 shape-full state-layer transition-colors ${showConfig ? 'bg-[var(--md-secondary-container)]' : ''}`}
-                            style={{ color: showConfig ? 'var(--md-on-secondary-container)' : 'var(--md-on-surface-variant)' }}
+                            className={`
+                                p-2 rounded-lg transition-all duration-200 hover-lift
+                                ${showConfig ? '' : ''}
+                            `}
+                            style={{
+                                backgroundColor: showConfig ? `${themeColor.primary}20` : 'transparent',
+                                color: showConfig ? themeColor.primary : 'var(--md-on-surface-variant)',
+                            }}
                             title="模型参数"
                         >
                             <Settings2 className="w-5 h-5" />
                         </button>
 
-                        {/* 参数面板 Popover */}
                         {showConfig && (
-                            <div className="absolute right-0 top-full mt-2 w-72 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
+                            <div className="absolute right-0 top-full mt-2 w-72 z-50 animate-scale-in">
                                 <ModelConfigPanel
                                     temperature={modelParams.temperature}
                                     topP={modelParams.top_p}
@@ -446,8 +472,8 @@ export default function AISolver() {
 
                     <button
                         onClick={handleNewSession}
-                        className="p-2 shape-full state-layer"
-                        style={{ color: 'var(--md-primary)' }}
+                        className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-all hover-lift"
+                        style={{ color: themeColor.primary }}
                         title="新对话"
                     >
                         <MessageSquarePlus className="w-5 h-5" />
@@ -455,22 +481,24 @@ export default function AISolver() {
                 </div>
             </header>
 
-            <div className="flex-1 flex overflow-hidden relative">
-                {/* 会话侧边栏 */}
+            <div className="flex-1 flex overflow-hidden relative theme-transition">
                 {showSidebar && (
                     <div
-                        className="fixed inset-0 z-40 lg:hidden"
-                        style={{ backgroundColor: 'rgba(0,0,0,0.3)' }}
+                        className="fixed inset-0 z-40 lg:hidden backdrop-blur-sm bg-black/20"
                         onClick={() => setShowSidebar(false)}
                     >
                         <div
-                            className="absolute left-0 top-0 h-full w-72 p-4"
-                            style={{ backgroundColor: 'var(--md-surface-container)' }}
+                            className="absolute left-0 top-0 h-full w-72 p-4 animate-slide-in-left"
+                            style={{ backgroundColor: isDark ? 'rgba(30,30,30,0.95)' : 'rgba(255,255,255,0.95)' }}
                             onClick={e => e.stopPropagation()}
                         >
                             <div className="flex items-center justify-between mb-4">
-                                <h2 className="font-medium" style={{ color: 'var(--md-on-surface)' }}>对话历史</h2>
-                                <button onClick={() => setShowSidebar(false)} className="p-2 shape-full" style={{ color: 'var(--md-on-surface-variant)' }}>
+                                <h2 className="font-semibold text-slate-800 dark:text-white">对话历史</h2>
+                                <button
+                                    onClick={() => setShowSidebar(false)}
+                                    className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                                    style={{ color: 'var(--md-on-surface-variant)' }}
+                                >
                                     <X className="w-5 h-5" />
                                 </button>
                             </div>
@@ -479,32 +507,37 @@ export default function AISolver() {
                                 activeId={activeSessionId}
                                 onSelect={handleSelectSession}
                                 onDelete={handleDeleteSession}
+                                colorTheme={colorTheme}
+                                themeColor={themeColor}
+                                isDark={isDark}
                             />
                         </div>
                     </div>
                 )}
 
                 <aside
-                    className="hidden lg:block w-64 p-4 shrink-0 overflow-y-auto"
+                    className="hidden lg:block w-64 p-4 shrink-0 overflow-y-auto no-scrollbar"
                     style={{
-                        backgroundColor: 'var(--md-surface-container-low)',
+                        backgroundColor: isDark ? 'rgba(30,30,30,0.4)' : 'rgba(255,255,255,0.5)',
                         borderRight: '1px solid var(--md-outline-variant)',
                     }}
                 >
-                    <h2 className="font-medium mb-4" style={{ color: 'var(--md-on-surface)' }}>对话历史</h2>
+                    <h2 className="font-semibold mb-4 text-slate-800 dark:text-white">对话历史</h2>
                     <SessionList
                         sessions={sessions}
                         activeId={activeSessionId}
                         onSelect={handleSelectSession}
                         onDelete={handleDeleteSession}
+                        colorTheme={colorTheme}
+                        themeColor={themeColor}
+                        isDark={isDark}
                     />
                 </aside>
 
-                {/* 主聊天区域 */}
-                <main className="flex-1 flex flex-col min-w-0 bg-[var(--md-surface)] relative">
-                    {/* 错误提示 */}
+                <main className="flex-1 flex flex-col min-w-0 relative theme-transition"
+                    style={{ backgroundColor: 'var(--md-surface)' }}>
                     {error && (
-                        <div className="absolute top-4 left-4 right-4 z-30 p-3 shape-lg flex items-center gap-2 animate-in slide-in-from-top-2"
+                        <div className="absolute top-4 left-4 right-4 z-30 p-3 rounded-xl flex items-center gap-2 animate-fade-slide-up"
                             style={{ backgroundColor: 'var(--md-error-container)', color: 'var(--md-on-error-container)' }}>
                             <AlertCircle className="w-5 h-5 shrink-0" />
                             <span className="text-sm flex-1">{error}</span>
@@ -512,26 +545,25 @@ export default function AISolver() {
                         </div>
                     )}
 
-                    {/* 消息列表 - 确保 flex-1 和 overflow-y-auto */}
                     <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4 space-y-4 scroll-smooth">
                         {messages.length === 0 ? (
-                            <EmptyState onStart={() => setInputValue('请帮我解答一道数学题')} />
+                            <EmptyState onStart={() => setInputValue('请帮我解答一道数学题')} themeColor={themeColor} />
                         ) : (
-                            messages.map(message => (
-                                <ChatMessage
-                                    key={message.id}
-                                    message={message}
-                                    onDelete={handleDeleteMessage}
-                                    onEdit={handleEditMessage}
-                                    onRegenerate={handleRegenerate}
-                                />
+                            messages.map((message, index) => (
+                                <div key={message.id} className="animate-fade-slide-up" style={{ animationDelay: `${index * 0.05}s` }}>
+                                    <ChatMessage
+                                        message={message}
+                                        onDelete={handleDeleteMessage}
+                                        onEdit={handleEditMessage}
+                                        onRegenerate={handleRegenerate}
+                                    />
+                                </div>
                             ))
                         )}
                         <div ref={messagesEndRef} className="h-4" />
                     </div>
 
-                    {/* 输入框区域 - 固定在底部 */}
-                    <div className="shrink-0 z-20">
+                    <div className="shrink-0 z-20 p-4">
                         <ChatInput
                             value={inputValue}
                             onChange={setInputValue}
@@ -540,6 +572,7 @@ export default function AISolver() {
                             isLoading={isLoading}
                             disabled={!aiService.checkApiConfigured()}
                             placeholder={aiService.checkApiConfigured() ? '输入问题，按 Enter 发送...' : '请先在设置中配置 API'}
+                            themeColor={themeColor}
                         />
                     </div>
                 </main>
@@ -548,49 +581,77 @@ export default function AISolver() {
     );
 }
 
-// ... unchanged sub-components (SessionList, EmptyState) ...
-function SessionList({ sessions, activeId, onSelect, onDelete }: { sessions: chatService.ChatSession[]; activeId: string | null; onSelect: (id: string) => void; onDelete: (id: string) => void; }) {
+function SessionList({ sessions, activeId, onSelect, onDelete, colorTheme, themeColor, isDark }: {
+    sessions: chatService.ChatSession[];
+    activeId: string | null;
+    onSelect: (id: string) => void;
+    onDelete: (id: string) => void;
+    colorTheme: string;
+    themeColor: { primary: string; light: string; dark: string };
+    isDark: boolean;
+}) {
     return (
-        <div className="space-y-1">
+        <div className="space-y-2">
             {sessions.map(session => (
                 <div
                     key={session.id}
-                    className={`flex items-center gap-2 p-3 shape-lg cursor-pointer group transition-all`}
-                    style={{ backgroundColor: session.id === activeId ? 'var(--md-secondary-container)' : 'transparent' }}
+                    className={`
+                        p-3 rounded-xl cursor-pointer transition-all duration-200 hover-lift
+                        ${session.id === activeId ? '' : ''}
+                    `}
+                    style={{
+                        backgroundColor: session.id === activeId
+                            ? `${themeColor.primary}15`
+                            : isDark ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.5)',
+                        border: session.id === activeId
+                            ? `1px solid ${themeColor.primary}30`
+                            : '1px solid transparent',
+                    }}
                     onClick={() => onSelect(session.id)}
                 >
-                    <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate" style={{ color: session.id === activeId ? 'var(--md-on-secondary-container)' : 'var(--md-on-surface)' }}>{session.title}</p>
-                        <p className="text-xs truncate" style={{ color: 'var(--md-on-surface-variant)' }}>{session.messages.length} 条消息</p>
+                    <div className="flex items-start gap-3">
+                        <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium truncate text-slate-800 dark:text-white">{session.title || '新对话'}</p>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">{session.messages.length} 条消息</p>
+                        </div>
+                        <button
+                            className="p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-all hover:bg-red-50 dark:hover:bg-red-900/20 hover:scale-105"
+                            style={{ color: 'var(--md-error)' }}
+                            onClick={(e) => { e.stopPropagation(); onDelete(session.id); }}
+                        >
+                            <Trash2 className="w-4 h-4" />
+                        </button>
                     </div>
-                    <button
-                        className="p-1.5 shape-full opacity-0 group-hover:opacity-100 transition-opacity"
-                        style={{ color: 'var(--md-error)' }}
-                        onClick={(e) => { e.stopPropagation(); onDelete(session.id); }}
-                    >
-                        <Trash2 className="w-4 h-4" />
-                    </button>
                 </div>
             ))}
         </div>
     );
 }
 
-function EmptyState({ onStart }: { onStart: () => void }) {
-    const { getGradientStyle } = useTheme();
+function EmptyState({ onStart, themeColor }: { onStart: () => void; themeColor: { primary: string; light: string; dark: string } }) {
     const suggestions = ['请帮我解答一道数学题', '帮我复习物理公式', '写一份学习计划', '解释一下什么是导数'];
 
     return (
         <div className="h-full flex flex-col items-center justify-center text-center px-4">
-            <div className="w-20 h-20 shape-xl flex items-center justify-center mb-6" style={getGradientStyle()}>
-                <MessageSquarePlus className="w-10 h-10 text-white" />
+            <div
+                className="w-20 h-20 rounded-2xl flex items-center justify-center mb-6 shadow-lg animate-bounce-soft"
+                style={{ background: `linear-gradient(135deg, ${themeColor.primary} 0%, ${themeColor.dark} 100%)` }}
+            >
+                <Sparkles className="w-10 h-10 text-white" />
             </div>
-            <h2 className="text-xl font-medium mb-2" style={{ color: 'var(--md-on-surface)' }}>开始新对话</h2>
-            <p className="mb-6 max-w-md" style={{ color: 'var(--md-on-surface-variant)' }}>我是你的 AI 学习助手，可以帮你解答问题、批改作业、制定学习计划</p>
+            <h2 className="text-xl font-semibold mb-2 text-slate-800 dark:text-white">开始新对话</h2>
+            <p className="mb-6 max-w-md text-slate-500 dark:text-slate-400">我是你的 AI 学习助手，可以帮你解答问题、批改作业、制定学习计划</p>
             <div className="flex flex-wrap justify-center gap-2">
                 {suggestions.map((text, i) => (
-                    <button key={i} onClick={() => onStart()} className="px-4 py-2 shape-full text-sm state-layer"
-                        style={{ backgroundColor: 'var(--md-surface-container-highest)', color: 'var(--md-on-surface)' }}>
+                    <button
+                        key={i}
+                        onClick={() => onStart()}
+                        className="px-4 py-2 rounded-xl text-sm transition-all duration-200 hover-lift hover:shadow-md"
+                        style={{
+                            backgroundColor: 'var(--md-surface-container)',
+                            color: 'var(--md-on-surface)',
+                        }}
+                    >
                         {text}
                     </button>
                 ))}

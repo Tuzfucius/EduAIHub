@@ -7,8 +7,8 @@ from typing import Annotated
 
 from database import get_db
 from models import User
-from schemas import UserRegister, UserLogin, UserResponse, Token, TokenData
-from security import hash_password, verify_password, create_access_token, decode_access_token
+from schemas import UserRegister, UserLogin, UserResponse, Token, TokenData, RefreshTokenRequest
+from security import hash_password, verify_password, create_access_token, decode_access_token, create_refresh_token, decode_refresh_token
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 security = HTTPBearer()
@@ -25,7 +25,7 @@ async def get_current_user(
     if payload is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="无效的认证凭据",
+            detail="登录已过期，请重新登录",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
@@ -85,9 +85,12 @@ async def register(user_data: UserRegister, db: AsyncSession = Depends(get_db)):
     
     # 生成 JWT 令牌
     access_token = create_access_token(data={"sub": new_user.id})
+    refresh_token = create_refresh_token(data={"sub": new_user.id})
     
     return Token(
         access_token=access_token,
+        refresh_token=refresh_token,
+        expires_in=3600,
         user=UserResponse.model_validate(new_user)
     )
 
@@ -119,9 +122,59 @@ async def login(login_data: UserLogin, db: AsyncSession = Depends(get_db)):
     
     # 生成 JWT 令牌
     access_token = create_access_token(data={"sub": user.id})
+    refresh_token = create_refresh_token(data={"sub": user.id})
     
     return Token(
         access_token=access_token,
+        refresh_token=refresh_token,
+        expires_in=3600,
+        user=UserResponse.model_validate(user)
+    )
+
+
+@router.post("/refresh", response_model=Token, summary="刷新令牌")
+async def refresh_token(req: RefreshTokenRequest, db: AsyncSession = Depends(get_db)):
+    """
+    使用刷新令牌获取新的访问令牌
+    
+    - **refresh_token**: 刷新令牌
+    """
+    payload = decode_refresh_token(req.refresh_token)
+    
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="刷新令牌无效或已过期",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    user_id: int = payload.get("sub")
+    if user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="刷新令牌无效",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # 获取用户
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="用户不存在",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # 生成新的令牌
+    access_token = create_access_token(data={"sub": user.id})
+    refresh_token = create_refresh_token(data={"sub": user.id})
+    
+    return Token(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        expires_in=3600,
         user=UserResponse.model_validate(user)
     )
 

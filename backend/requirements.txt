@@ -9,22 +9,11 @@ passlib==1.7.4
 bcrypt==4.0.1
 python-multipart==0.0.6
 
-# RAG / HuixiangDou Dependencies (Lightweight)
+# RAG Dependencies (Lightweight)
 faiss-cpu
-loguru
 pymupdf
-python-docx
-openpyxl
-pandas
-networkx
-beautifulsoup4
-readability-lxml
-lxml_html_clean
-pytoml
 numpy
-scikit-learn
-texttable
 openai
 requests
-jieba
-duckduckgo-search
+pytoml
+httpx

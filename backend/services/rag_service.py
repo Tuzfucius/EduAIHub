@@ -1,288 +1,231 @@
+"""
+RAG 服务层
+
+基于新模块化架构的 RAG 服务实现。
+"""
 
 import os
-import shutil
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
-from typing import List, Optional
-import shutil
+from typing import List, Dict, Any, Optional
+from pathlib import Path
 
-from pkg.huixiangdou.services import FeatureStore, CacheRetriever
-from pkg.huixiangdou.primitive import FileName, Embedder, LLMReranker
 from models.knowledge import KnowledgeBase, KnowledgeFile
 from config import settings
 
-# Global Cache Retriever Instance
-# To avoid reloading models, we keep a singleton or managed instance.
-# HuixiangDou CacheRetriever handles LRU caching internally.
+from .rag import (
+    create_pdf_document,
+    create_faiss_store,
+    SimpleRetriever,
+    create_qa,
+    RagConfig,
+    create_chunker,
+)
+
 
 class RagService:
+    """RAG 服务
+
+    使用新模块化架构，提供知识库构建和问答功能。
+    """
+
     def __init__(self):
-        # Ensure we have a config object for HuixiangDou
-        # For now we might need to generate a temporary config.ini or mock it
-        self.executor = ThreadPoolExecutor(max_workers=2)
-        
-        # We need a base config for shared settings (like embedding API key)
-        self.base_config = {
-            "feature_store": {
-                "reject_throttle": 0.2,
-                "embedding_model_path": settings.EMBEDDING_API_URL or "https://api.siliconflow.cn/v1/embeddings",
-                "reranker_model_path": "BAAI/bge-reranker-v2-m3", # logical name for API
-                "api_token": settings.EMBEDDING_API_KEY,  # User needs to set this
-                "api_rpm": 500,
-                "api_tpm": 20000
-            }
-        }
-        
-        # Create a dummy config path because HuixiangDou expects a file path
-        self.config_path = os.path.join(settings.BASE_DIR, "rag_config.toml")
-        import pytoml
-        with open(self.config_path, 'w', encoding='utf-8') as f:
-            pytoml.dump(self.base_config, f)
-            
-        self.cache = CacheRetriever(config_path=self.config_path)
+        self.config = RagConfig.from_env()
+        self._store_cache: Dict[int, SimpleRetriever] = {}
 
-    async def build_kb_index(self, kb: KnowledgeBase, files: List[KnowledgeFile]):
-        """Build/Rebuild index for a Knowledge Base"""
-        
-        # 1. Prepare file list for HuixiangDou
-        # FilePath needs to be FileName object
-        # HuixiangDou uses FileName class: origin, copypath, _type
-        
-        target_files = []
+    def _get_store_dir(self, kb: KnowledgeBase) -> str:
+        """获取向量索引目录"""
+        return os.path.join(kb.work_dir, "index")
+
+    def _get_retriever(self, kb: KnowledgeBase) -> SimpleRetriever:
+        """获取或创建检索器（带缓存）"""
+        if kb.id in self._store_cache:
+            return self._store_cache[kb.id]
+
+        store_dir = self._get_store_dir(kb)
+        store = create_faiss_store(store_dir=store_dir)
+        retriever = SimpleRetriever(vector_store=store)
+        self._store_cache[kb.id] = retriever
+        return retriever
+
+    async def build_kb_index(self, kb: KnowledgeBase, files: List[KnowledgeFile]) -> bool:
+        """构建/重建知识库索引
+
+        Args:
+            kb: 知识库
+            files: 文件列表
+
+        Returns:
+            是否成功
+        """
         work_dir = kb.work_dir
-        
-        # Ensure workdirs exist
         os.makedirs(work_dir, exist_ok=True)
-        
-        for f in files:
-            # We assume file_path is the absolute path where we saved the uploaded file
-            # or we need to copy it to a repodir-like structure?
-            # HuixiangDou preprocess copies file to work_dir/preprocess.
-            
-            # Determine type
-            ext = os.path.splitext(f.filename)[1].lower().replace('.', '')
-            if ext in ['pdf', 'doc', 'docx']:
-                ftype = 'pdf' if ext == 'pdf' else 'word'
-            elif ext in ['md', 'txt']:
-                ftype = 'text' if ext == 'txt' else 'md'
-            elif ext in ['jpg', 'png']:
-                ftype = 'image'
-            else:
-                ftype = 'text' # default
-                
-            fn = FileName(root=os.path.dirname(f.file_path), filename=os.path.basename(f.file_path), _type=ftype)
-            target_files.append(fn)
 
-        # 2. Run FeatureStore initialization in thread pool
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            self.executor, 
-            self._sync_build, 
-            self.cache.embedder, 
-            self.config_path, 
-            target_files, 
-            work_dir
-        )
-        
-        # 3. Mark KB as ready
+        all_chunks = []
+        file_ids = []
+
+        for f in files:
+            if not os.path.exists(f.file_path):
+                continue
+
+            file_id = f"{kb.id}_{f.id}"
+            file_ids.append(file_id)
+
+            ext = Path(f.file_path).suffix.lower()
+
+            if ext == ".pdf":
+                chunks = await self._process_pdf(f.file_path, file_id)
+            elif ext in [".txt", ".md"]:
+                chunks = self._process_text(f.file_path, file_id)
+            else:
+                continue
+
+            all_chunks.extend(chunks)
+
+        if not all_chunks:
+            return True
+
+        store_dir = self._get_store_dir(kb)
+        store = create_faiss_store(store_dir=store_dir)
+        await store.add(all_chunks)
+
+        if kb.id in self._store_cache:
+            del self._store_cache[kb.id]
+
         return True
 
-    def _sync_build(self, embedder, config_path, files, work_dir):
-        """Synchronous build function to run in thread"""
-        fs = FeatureStore(embedder=embedder, config_path=config_path)
-        
-        # Mock InitializeConfig
-        class MockConfig:
-            def __init__(self, files, work_dir):
-                self.files = files
-                self.work_dir = work_dir
-                self.ner_file = None
-                self.qa_pair_file = None
-        
-        conf = MockConfig(files, work_dir)
-        try:
-            fs.initialize(config=conf)
-            return True
-        except Exception as e:
-            print(f"Build Failed: {e}")
-            raise e
-
-    async def query_kb(self, kb: KnowledgeBase, question: str):
-        """Query Knowledge Base"""
-        loop = asyncio.get_running_loop()
-        
-        # Get retriever from cache
-        # fs_id should be unique str for the KB
-        fs_id = f"kb_{kb.id}"
-        
-        result = await loop.run_in_executor(
-            self.executor,
-            self._sync_query,
-            fs_id,
-            self.config_path,
-            kb.work_dir,
-            question
+    async def _process_pdf(self, file_path: str, file_id: str) -> List:
+        """处理 PDF 文件"""
+        pdf = create_pdf_document(
+            file_path=file_path,
+            chunk_strategy="paragraph",
+            chunk_size=self.config.chunk_size,
+            chunk_overlap=self.config.chunk_overlap,
         )
-        return result
+        chunks = pdf.parse()
 
-    def _sync_query(self, fs_id, config_path, work_dir, question):
-        retriever = self.cache.get(fs_id=fs_id, config_path=config_path, work_dir=work_dir)
-        
-        # HuixiangDou query returns: splits, context, refs, ref_texts
-        # But we want specific structured data
-        
-        # First check is_relative (Rejection pipeline)
-        # relative, score = retriever.is_relative(question)
-        # if not relative:
-        #     return {"rejected": True, "answer": "I cannot answer this based on the knowledge base.", "references": []}
-            
-        # Run Query (Pipeline)
-        chunks, context, refs, ref_texts = retriever.query(query=question)
-        
-        if not chunks and not context:
-             return {"rejected": True, "answer": "未在知识库中找到相关内容。", "references": []}
-        
-        # Format references
-        formatted_refs = []
-        for i, r in enumerate(refs):
-            formatted_refs.append({
-                "filename": r,
-                "content": ref_texts[i] if i < len(ref_texts) else "",
-                "score": 0.0 # TODO: extract score if available
-            })
-            
+        for chunk in chunks:
+            chunk.metadata["source_file_id"] = file_id
+
+        return chunks
+
+    def _process_text(self, file_path: str, file_id: str) -> List:
+        """处理文本文件"""
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        chunker = create_chunker(
+            strategy="paragraph",
+            chunk_size=self.config.chunk_size,
+            chunk_overlap=self.config.chunk_overlap,
+        )
+
+        chunks = chunker.chunk(content, file_path, file_id)
+        return chunks
+
+    async def query_kb(
+        self,
+        kb: KnowledgeBase,
+        question: str,
+        history: Optional[List[Dict[str, str]]] = None,
+    ) -> Dict[str, Any]:
+        """查询知识库
+
+        Args:
+            kb: 知识库
+            question: 问题
+            history: 对话历史
+
+        Returns:
+            包含答案和引用的字典
+        """
+        retriever = self._get_retriever(kb)
+        qa = create_qa(retriever=retriever)
+
+        result = await qa.chat(
+            question=question,
+            history=history,
+            top_k=self.config.search_top_k,
+        )
+
         return {
             "rejected": False,
-            "answer": "", # The pure retriever doesn't generate answer, it returns context. We need to pass this context to LLM separately or here.
-            "context": context,
-            "references": formatted_refs
+            "answer": result.get("answer", ""),
+            "context": result.get("context", ""),
+            "references": result.get("references", []),
         }
-        
-    def init_llm(self):
-        """Initialize LLM for agentic tasks"""
-        # Create a temporary config for LLM if not exists
-        llm_config_path = os.path.join(settings.BASE_DIR, "llm_config.toml")
-        
-        # We need a proper config structure for LLM class
-        # It expects ['llm']['server']
-        # We can map our settings to this
-        llm_config = {
-            "llm": {
-                "server": {
-                    "remote_type": "siliconcloud", # Default or from settings
-                    "remote_api_key": settings.LLM_API_KEY,
-                    "remote_llm_model": settings.LLM_MODEL,
-                    "base_url": settings.LLM_API_URL,
-                    "rpm": 500,
-                    "tpm": 20000
-                }
+
+    async def delete_file_from_kb(self, kb: KnowledgeBase, file_id: str) -> bool:
+        """从知识库中删除文件
+
+        Args:
+            kb: 知识库
+            file_id: 文件 ID
+
+        Returns:
+            是否成功
+        """
+        store_dir = self._get_store_dir(kb)
+
+        if not os.path.exists(store_dir):
+            return True
+
+        from .rag import FAISSStore
+        store = FAISSStore(store_dir=store_dir)
+        await store.delete_by_file_id(file_id)
+
+        if kb.id in self._store_cache:
+            del self._store_cache[kb.id]
+
+        return True
+
+    async def clear_kb(self, kb: KnowledgeBase) -> bool:
+        """清空知识库
+
+        Args:
+            kb: 知识库
+
+        Returns:
+            是否成功
+        """
+        store_dir = self._get_store_dir(kb)
+
+        if os.path.exists(store_dir):
+            import shutil
+            shutil.rmtree(store_dir)
+
+        if kb.id in self._store_cache:
+            del self._store_cache[kb.id]
+
+        return True
+
+    async def get_kb_stats(self, kb: KnowledgeBase) -> Dict[str, Any]:
+        """获取知识库统计信息
+
+        Args:
+            kb: 知识库
+
+        Returns:
+            统计信息
+        """
+        store_dir = self._get_store_dir(kb)
+
+        if not os.path.exists(store_dir):
+            return {
+                "document_count": 0,
+                "file_count": 0,
             }
+
+        from .rag import FAISSStore
+        store = FAISSStore(store_dir=store_dir)
+        file_ids = store.get_file_ids()
+
+        return {
+            "document_count": store.document_count,
+            "file_count": len(file_ids),
         }
-        
-        import pytoml
-        with open(llm_config_path, 'w', encoding='utf-8') as f:
-            pytoml.dump(llm_config, f)
-            
-        from pkg.huixiangdou.services.llm import LLM
-        return LLM(config_path=llm_config_path)
 
-    async def auto_classify_file(self, file_path: str, filename: str, kbs: List[str]):
-        """
-        Use LLM to classify file into an existing KB or suggest a new one.
-        Returns: (kb_name, reason, is_new)
-        """
-        llm = self.init_llm()
-        
-        # Read file summary (first 1000 chars)
-        content_preview = ""
-        try:
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                content_preview = f.read(1000)
-        except:
-            content_preview = "Binary file or unreadable text."
+    def get_stores_count(self) -> int:
+        """获取已加载的存储数量"""
+        return len(self._store_cache)
 
-        # Define Tools
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "classify_knowledge_file",
-                    "description": "Classify a file into a Knowledge Base",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "target_kb_name": {
-                                "type": "string",
-                                "description": "The name of the target Knowledge Base. Pick from existing list if suitable, otherwise create a new descriptive name."
-                            },
-                            "reason": {
-                                "type": "string",
-                                "description": "Reason for this classification"
-                            },
-                            "is_new_kb": {
-                                "type": "boolean",
-                                "description": "True if this is a new KB name not in the existing list"
-                            }
-                        },
-                        "required": ["target_kb_name", "reason", "is_new_kb"]
-                    }
-                }
-            }
-        ]
-
-        prompt = f"""
-I have a file named "{filename}".
-Content Preview:
-{content_preview}
-
-Existing Knowledge Bases: {', '.join(kbs) if kbs else 'None'}
-
-Please classify this file into a suitable Knowledge Base. 
-If an existing KB matches, use it. 
-If not, invent a new short, descriptive KB name (e.g., 'Math', 'Physics', 'ProjectDocs').
-Call the tool to submit your decision.
-"""
-        
-        # We need to use LLM's chat method but it might not expose tools directly in 'chat' wrapper
-        # The wrapper in pkg.huixiangdou.services.llm.LLM.chat accepts `tools` argument!
-        # It usually returns content string. If tool called, OpenAI returns tool_calls in message.
-        # But the `chat` method in `llm.py` returns specific string content and logs response. 
-        # It does NOT return the full response object or tool calls.
-        
-        # Inspecting `llm.py`: 
-        # response = await openai_async_client.chat.completions.create(**kwargs)
-        # content = response.choices[0].message.content
-        # return content.strip()
-        
-        # PROBLEM: The existing LLM wrapper swallows tool calls!
-        # We need to bypass it or patch it.
-        # Since I am in `rag_service.py`, I can just use `openai_async_client` directly or modify wrapper.
-        # Modifying wrapper is better for long term, but risky now.
-        # I will use a raw call here for safety using the config from the wrapper instance.
-        
-        backend = list(llm.backends.values())[0]
-        from openai import AsyncOpenAI
-        client = AsyncOpenAI(base_url=backend.base_url, api_key=backend.api_key)
-        
-        messages = [{"role": "user", "content": prompt}]
-        
-        try:
-            response = await client.chat.completions.create(
-                model=backend.model,
-                messages=messages,
-                tools=tools,
-                tool_choice={"type": "function", "function": {"name": "classify_knowledge_file"}}
-            )
-            
-            tool_calls = response.choices[0].message.tool_calls
-            if tool_calls:
-                args = json.loads(tool_calls[0].function.arguments)
-                return args.get("target_kb_name"), args.get("reason"), args.get("is_new_kb")
-            
-            return None, "No decision made", False
-            
-        except Exception as e:
-            print(f"Auto-classify failed: {e}")
-            return "Unsorted", "Classification failed", True
 
 rag_service = RagService()

@@ -4,7 +4,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import type { User } from '@/types';
 import * as authService from '@/services/auth';
-import { getToken } from '@/services/api';
+import { getToken, getRefreshToken, saveToken, saveRefreshToken, clearTokens, refreshAccessToken } from '@/services/api';
 
 interface AuthContextType {
     user: User | null;
@@ -24,17 +24,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     useEffect(() => {
         const restoreSession = async () => {
             const token = getToken();
-            if (!token) {
+            const refreshToken = getRefreshToken();
+            
+            if (!refreshToken) {
                 setIsLoading(false);
                 return;
             }
 
             try {
-                const currentUser = await authService.getCurrentUser();
-                setUser(currentUser);
+                // 如果有 refresh_token，尝试刷新
+                if (refreshToken) {
+                    const refreshed = await refreshAccessToken();
+                    if (refreshed) {
+                        const currentUser = await authService.getCurrentUser();
+                        setUser(currentUser);
+                    } else {
+                        // 刷新失败，清除令牌
+                        clearTokens();
+                    }
+                } else if (token) {
+                    // 没有 refresh_token，但有 access_token，尝试获取用户信息
+                    const currentUser = await authService.getCurrentUser();
+                    setUser(currentUser);
+                }
             } catch (error) {
                 console.error('恢复会话失败:', error);
-                authService.logout();
+                clearTokens();
             } finally {
                 setIsLoading(false);
             }
@@ -45,11 +60,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const login = async (username: string, password: string) => {
         const response = await authService.login({ username, password });
+        // 保存令牌
+        if (response.access_token) {
+            saveToken(response.access_token);
+        }
+        if (response.refresh_token) {
+            saveRefreshToken(response.refresh_token);
+        }
         setUser(response.user);
     };
 
     const register = async (username: string, password: string, name: string, grade?: string) => {
         const response = await authService.register({ username, password, name, grade });
+        // 保存令牌
+        if (response.access_token) {
+            saveToken(response.access_token);
+        }
+        if (response.refresh_token) {
+            saveRefreshToken(response.refresh_token);
+        }
         setUser(response.user);
     };
 

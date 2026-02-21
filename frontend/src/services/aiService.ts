@@ -19,7 +19,44 @@ export interface GenerationOptions {
     top_p?: number;
 }
 
-// ... unchanged imports and interfaces ...
+/**
+ * 调试工具：打印图片信息
+ */
+function logImageDebug(images: string[], label: string = '[Image Debug]') {
+    console.group(label);
+    console.log('Count:', images.length);
+    images.forEach((img, i) => {
+        const isDataUrl = img.startsWith('data:');
+        const mimeMatch = img.match(/^data:(image\/\w+);base64,/);
+        const sizeKB = (img.length / 1024).toFixed(1);
+        console.log(`Image ${i}:`, {
+            isDataUrl,
+            mimeType: mimeMatch ? mimeMatch[1] : 'unknown',
+            sizeKB,
+            preview: img.substring(0, 50) + '...'
+        });
+    });
+    console.groupEnd();
+}
+
+/**
+ * 工具函数：检测 base64 图片的 MIME 类型
+ */
+function getMimeType(base64String: string): string {
+    const match = base64String.match(/^data:(image\/\w+);base64,/);
+    return match ? match[1] : 'image/jpeg';
+}
+
+/**
+ * 工具函数：规范化图片 URL
+ */
+function normalizeImageUrl(img: string): string {
+    if (img.startsWith('data:')) {
+        return img;
+    }
+    const mimeType = getMimeType(img);
+    return `data:${mimeType};base64,${img}`;
+}
 
 /**
  * 构建请求体（OpenAI 格式）
@@ -32,17 +69,22 @@ function buildOpenAIRequestBody(
 ): object {
     const formattedMessages = messages.map(m => {
         if (m.role === 'user' && m.images && m.images.length > 0) {
+            // 调试日志
+            logImageDebug(m.images, '[OpenAI] Processing images');
+
+            const content = [
+                { type: 'text', text: m.content },
+                ...m.images.map(img => ({
+                    type: 'image_url' as const,
+                    image_url: {
+                        url: normalizeImageUrl(img)
+                    }
+                }))
+            ];
+
             return {
                 role: m.role,
-                content: [
-                    { type: 'text', text: m.content },
-                    ...m.images.map(img => ({
-                        type: 'image_url',
-                        image_url: {
-                            url: img.startsWith('data:') ? img : `data:image/jpeg;base64,${img}`
-                        }
-                    }))
-                ]
+                content: content
             };
         }
         return {
@@ -70,34 +112,33 @@ function buildAnthropicRequestBody(
     stream: boolean = true,
     options?: GenerationOptions
 ): object {
-    // 提取 system message
     const systemMessage = messages.find(m => m.role === 'system');
     const chatMessages = messages.filter(m => m.role !== 'system');
 
     const formattedMessages = chatMessages.map(m => {
         if (m.role === 'user' && m.images && m.images.length > 0) {
+            logImageDebug(m.images, '[Anthropic] Processing images');
+
+            const content = m.images.map(img => {
+                const base64Data = img.replace(/^data:image\/\w+;base64,/, '');
+                const match = img.match(/^data:(image\/\w+);base64,/);
+                const mediaType = match ? match[1] : 'image/jpeg';
+
+                return {
+                    type: 'image' as const,
+                    source: {
+                        type: 'base64' as const,
+                        media_type: mediaType,
+                        data: base64Data
+                    }
+                };
+            });
+
+            content.push({ type: 'text' as const, text: m.content });
+
             return {
                 role: m.role,
-                content: [
-                    ...m.images.map(img => {
-                        // 移除 data:image/xxx;base64, 前缀，因为 Anthropic 只需要 data 部分
-                        const base64Data = img.replace(/^data:image\/\w+;base64,/, '');
-                        // 尝试从 base64 前缀获取 mime type，默认为 jpeg
-                        let mediaType = 'image/jpeg';
-                        const match = img.match(/^data:(image\/\w+);base64,/);
-                        if (match) mediaType = match[1];
-
-                        return {
-                            type: 'image',
-                            source: {
-                                type: 'base64',
-                                media_type: mediaType,
-                                data: base64Data
-                            }
-                        };
-                    }),
-                    { type: 'text', text: m.content }
-                ]
+                content: content
             };
         }
         return {

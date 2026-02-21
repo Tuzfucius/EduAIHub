@@ -1,6 +1,7 @@
-
+ 
 import os
 import shutil
+import re
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,9 +20,35 @@ from schemas.rag import (
 )
 
 import uuid
-import shutil
 
-# ... existing imports ...
+
+def sanitize_kb_name(name: str) -> str:
+    """KB 名称标准化：只保留字母、数字、中文和常用运算符
+    
+    保留字符包括:
+    - 字母 (a-z, A-Z)
+    - 数字 (0-9)
+    - 中文 (\u4e00-\u9fff)
+    - 常用运算符和分隔符: +, -, *, /, =, _, (, ), [ ], { }, ., ,, :, ;, ', ", `, ~, @, #
+    - 数学符号: ≤, ≥, ≠, ∞, √, ∑, ∫, ∂, ∇, ∆, π, σ, μ, λ, α, β, γ, δ, ε, θ
+    """
+    import re
+    
+    # 只保留允许的字符
+    # 中文范围: \u4e00-\u9fff
+    # 运算符: + - * / = _ ( ) [ ] { } . , : ; ' " ` ~ @ # ≤ ≥ ≠ ∞ √ ∑ ∫ ∂ ∇ Δ π σ μ λ α β γ δ ε θ
+    
+    allowed_pattern = r'[a-zA-Z0-9\u4e00-\u9fff+\-*/=_()\[\]{}.,:;"\'`~@#≤≥≠∞√∑∫∂∇Δπσμλαβγδεθ]+'
+    
+    matches = re.findall(allowed_pattern, name)
+    sanitized = ''.join(matches)
+    
+    # 清理连续的下划线或空格
+    sanitized = re.sub(r'_+', '_', sanitized)
+    sanitized = sanitized.strip('_')
+    
+    return sanitized if sanitized else "未命名知识库"
+
 
 router = APIRouter(prefix="/api/rag", tags=["知识库 (RAG)"])
 
@@ -40,21 +67,27 @@ async def create_kb(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    # Determine work_dir
-    # Not using actual DB id yet because it's not committed. 
-    # But we can update it later or use randomness?
-    # Let's simple use: data/rag/{user_id}/{hash_or_name}
-    import hashlib
-    import time
+    # KB 名称标准化
+    kb_name = sanitize_kb_name(kb_data.name)
     
-    unique_str = f"{current_user.id}-{kb_data.name}-{time.time()}"
-    kb_hash = hashlib.md5(unique_str.encode()).hexdigest()[0:8]
-    work_dir = os.path.join(settings.BASE_DIR, "data", "rag", str(current_user.id), kb_hash)
+    # 目录结构: material/{user_id}/{kb_name}/
+    work_dir = os.path.join(
+        settings.BASE_DIR,
+        settings.MATERIAL_DIR,
+        str(current_user.id),
+        kb_name
+    )
+    
+    # 创建目录
     os.makedirs(work_dir, exist_ok=True)
+    
+    # 创建 origin/ 子目录
+    origin_dir = os.path.join(work_dir, "origin")
+    os.makedirs(origin_dir, exist_ok=True)
     
     new_kb = KnowledgeBase(
         user_id=current_user.id,
-        name=kb_data.name,
+        name=kb_name,
         description=kb_data.description,
         status="empty",
         work_dir=work_dir
@@ -125,9 +158,7 @@ async def upload_file(
 ):
     kb = await get_kb_by_id(kb_id, current_user.id, db)
     
-    # Storage path
-    # Put uploaded files in work_dir/uploads or separate?
-    # Separate is better for clarity.
+    # Storage path: origin/ 子目录
     uploads_dir = os.path.join(kb.work_dir, "origin")
     os.makedirs(uploads_dir, exist_ok=True)
     
@@ -216,8 +247,8 @@ async def upload_temp_file(
     current_user: User = Depends(get_current_user)
 ):
     """Upload file to a temporary area for classification"""
-    # Create temp dir
-    temp_dir = os.path.join(settings.BASE_DIR, "data", "rag", "temp", str(current_user.id))
+    # Temp dir: material/.temp/{user_id}/
+    temp_dir = os.path.join(settings.BASE_DIR, settings.MATERIAL_DIR, ".temp", str(current_user.id))
     os.makedirs(temp_dir, exist_ok=True)
     
     # Unique ID
@@ -254,7 +285,8 @@ async def auto_classify(
     """
     Auto identify which KB the file belongs to, create KB if needed, and move file.
     """
-    temp_dir = os.path.join(settings.BASE_DIR, "data", "rag", "temp", str(current_user.id))
+    # Temp dir: material/.temp/{user_id}/
+    temp_dir = os.path.join(settings.BASE_DIR, settings.MATERIAL_DIR, ".temp", str(current_user.id))
     temp_path = os.path.join(temp_dir, req.temp_file_id)
     
     if not os.path.exists(temp_path):
@@ -286,12 +318,18 @@ async def auto_classify(
     
     if not target_kb:
         # Create New KB
-        import hashlib
-        import time
-        unique_str = f"{current_user.id}-{target_kb_name}-{time.time()}"
-        kb_hash = hashlib.md5(unique_str.encode()).hexdigest()[0:8]
-        work_dir = os.path.join(settings.BASE_DIR, "data", "rag", str(current_user.id), kb_hash)
+        target_kb_name = sanitize_kb_name(target_kb_name)
+        work_dir = os.path.join(
+            settings.BASE_DIR,
+            settings.MATERIAL_DIR,
+            str(current_user.id),
+            target_kb_name
+        )
         os.makedirs(work_dir, exist_ok=True)
+        
+        # 创建 origin 子目录
+        origin_dir = os.path.join(work_dir, "origin")
+        os.makedirs(origin_dir, exist_ok=True)
         
         target_kb = KnowledgeBase(
             user_id=current_user.id,

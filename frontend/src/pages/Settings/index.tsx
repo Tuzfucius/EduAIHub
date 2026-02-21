@@ -15,13 +15,15 @@ import {
     X,
     Save,
     Zap,
-    AlertCircle
+    Moon,
+    Sun
 } from 'lucide-react';
-import { useTheme, PRESET_GRADIENTS, GradientConfig } from '@/contexts/ThemeContext';
+import { useTheme, THEME_COLORS } from '@/contexts/ThemeContext';
 import { useAuth } from '@/contexts/AuthContext';
 import * as settingsService from '@/services/settingsService';
 import * as promptService from '@/services/promptService';
 import { testApiConnection } from '@/services/aiService';
+import { ThemeColor } from '@/config/theme';
 
 type TabId = 'appearance' | 'api' | 'prompt';
 
@@ -33,48 +35,28 @@ const tabs: { id: TabId; icon: React.ElementType; label: string }[] = [
 
 export default function Settings() {
     const [activeTab, setActiveTab] = useState<TabId>('appearance');
-    const { gradient, setGradient, getGradientStyle } = useTheme();
+    const { isDark, toggleTheme, colorTheme, setColorTheme } = useTheme();
     const { user } = useAuth();
 
-    // 初始化用户设置
     useEffect(() => {
         if (user?.id) {
             settingsService.setCurrentUser(user.id.toString());
         }
     }, [user]);
 
-    // 自定义颜色
-    const [customFrom, setCustomFrom] = useState(gradient.from);
-    const [customTo, setCustomTo] = useState(gradient.to);
-
-    const handleApplyCustomGradient = () => {
-        setGradient({ from: customFrom, to: customTo, direction: '135deg' });
-    };
-
-    const handlePresetClick = (config: GradientConfig) => {
-        setGradient(config);
-        setCustomFrom(config.from);
-        setCustomTo(config.to);
-    };
-
     return (
-        <div className="min-h-full p-4 md:p-6">
+        <div className="min-h-full p-4 md:p-6 theme-transition" style={{ backgroundColor: 'var(--md-surface)' }}>
             <div className="max-w-5xl mx-auto">
-                {/* Header */}
-                <div className="mb-6">
-                    <h1
-                        className="text-2xl md:text-3xl font-medium"
-                        style={{ color: 'var(--md-on-surface)' }}
-                    >
+                <div className="mb-8 animate-fade-in">
+                    <h1 className="text-2xl md:text-3xl font-semibold mb-2 text-slate-800 dark:text-white">
                         设置
                     </h1>
-                    <p style={{ color: 'var(--md-on-surface-variant)' }}>
+                    <p className="text-slate-500 dark:text-slate-400">
                         自定义您的学习体验
                     </p>
                 </div>
 
                 <div className="flex flex-col md:flex-row gap-6">
-                    {/* 侧边栏 */}
                     <div className="md:w-56 shrink-0">
                         <nav className="space-y-1">
                             {tabs.map((tab) => {
@@ -85,14 +67,16 @@ export default function Settings() {
                                     <button
                                         key={tab.id}
                                         onClick={() => setActiveTab(tab.id)}
-                                        className="w-full flex items-center gap-3 px-4 py-3 shape-lg transition-all text-left"
-                                        style={{
-                                            backgroundColor: isActive ? 'var(--md-secondary-container)' : 'transparent',
-                                            color: isActive ? 'var(--md-on-secondary-container)' : 'var(--md-on-surface-variant)',
-                                        }}
+                                        className={`
+                                            w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 text-left
+                                            ${isActive
+                                                ? 'bg-[var(--color-theme-light)] text-[var(--color-theme-dark)] font-semibold'
+                                                : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-200'
+                                            }
+                                        `}
                                     >
-                                        <Icon className="w-5 h-5" />
-                                        <span className={isActive ? 'font-medium' : ''}>{tab.label}</span>
+                                        <Icon className={`w-5 h-5 ${isActive ? 'text-[var(--color-theme)]' : ''}`} />
+                                        <span>{tab.label}</span>
                                         {isActive && <ChevronRight className="w-4 h-4 ml-auto" />}
                                     </button>
                                 );
@@ -100,18 +84,13 @@ export default function Settings() {
                         </nav>
                     </div>
 
-                    {/* 内容区 */}
                     <div className="flex-1">
                         {activeTab === 'appearance' && (
                             <AppearanceTab
-                                gradient={gradient}
-                                customFrom={customFrom}
-                                customTo={customTo}
-                                setCustomFrom={setCustomFrom}
-                                setCustomTo={setCustomTo}
-                                onApply={handleApplyCustomGradient}
-                                onPresetClick={handlePresetClick}
-                                getGradientStyle={getGradientStyle}
+                                isDark={isDark}
+                                toggleTheme={toggleTheme}
+                                colorTheme={colorTheme}
+                                setColorTheme={setColorTheme}
                             />
                         )}
                         {activeTab === 'api' && <ApiTab />}
@@ -123,76 +102,110 @@ export default function Settings() {
     );
 }
 
-// ============ 外观设置 ============
 function AppearanceTab({
-    gradient,
-    customFrom,
-    customTo,
-    setCustomFrom,
-    setCustomTo,
-    onApply,
-    onPresetClick,
-    getGradientStyle,
+    isDark,
+    toggleTheme,
+    colorTheme,
+    setColorTheme
 }: {
-    gradient: GradientConfig;
-    customFrom: string;
-    customTo: string;
-    setCustomFrom: (v: string) => void;
-    setCustomTo: (v: string) => void;
-    onApply: () => void;
-    onPresetClick: (config: GradientConfig) => void;
-    getGradientStyle: () => React.CSSProperties;
+    isDark: boolean;
+    toggleTheme: () => void;
+    colorTheme: string;
+    setColorTheme: (theme: ThemeColor) => void;
 }) {
+    const themeColor = THEME_COLORS.find(c => c.id === colorTheme) || THEME_COLORS[0];
+
     return (
-        <div className="space-y-6">
-            {/* 预览 */}
-            <div className="p-6 shape-xl text-white" style={getGradientStyle()}>
-                <h3 className="text-lg font-medium mb-2">渐变预览</h3>
-                <p className="text-white/80">这是您自定义渐变色的效果预览</p>
+        <div className="space-y-6 animate-fade-slide-up">
+            <div
+                className="p-6 rounded-2xl text-white shadow-lg relative overflow-hidden"
+                style={{
+                    background: `linear-gradient(135deg, ${themeColor.primary} 0%, ${themeColor.dark} 100%)`
+                }}
+            >
+                <div className="absolute top-0 right-0 p-8 opacity-10">
+                    <Palette className="w-32 h-32" />
+                </div>
+                <div className="relative z-10">
+                    <h3 className="text-lg font-semibold mb-2">主题预览</h3>
+                    <p className="text-white/80">这是您选择的主题色效果预览</p>
+                </div>
             </div>
 
-            {/* 预设 */}
-            <Card title="预设渐变">
-                <div className="grid grid-cols-3 gap-3">
-                    {PRESET_GRADIENTS.map((preset) => {
-                        const isSelected = gradient.from === preset.config.from && gradient.to === preset.config.to;
+            <div className={`
+                p-6 rounded-2xl shadow-sm
+                ${isDark ? 'glass-dark-theme' : 'glass'}
+            `}>
+                <h3 className="font-semibold mb-4 text-slate-800 dark:text-white">外观偏好</h3>
+
+                <div className="flex items-center justify-between p-4 rounded-xl mb-4" style={{
+                    backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.02)'
+                }}>
+                    <div className="flex items-center gap-3">
+                        {isDark ? <Moon className="w-5 h-5 text-slate-400" /> : <Sun className="w-5 h-5 text-amber-500" />}
+                        <div>
+                            <p className="font-medium text-slate-800 dark:text-white">深色模式</p>
+                            <p className="text-sm text-slate-500 dark:text-slate-400">切换明暗主题</p>
+                        </div>
+                    </div>
+                    <button
+                        onClick={toggleTheme}
+                        className={`
+                            w-14 h-8 rounded-full transition-all duration-300 relative
+                            ${isDark ? 'bg-[var(--color-theme)]' : 'bg-slate-300'}
+                        `}
+                    >
+                        <span
+                            className={`
+                                absolute top-1 w-6 h-6 rounded-full bg-white shadow-md transition-all duration-300
+                                ${isDark ? 'left-7' : 'left-1'}
+                            `}
+                        />
+                    </button>
+                </div>
+            </div>
+
+            <div className={`
+                p-6 rounded-2xl shadow-sm
+                ${isDark ? 'glass-dark-theme' : 'glass'}
+            `}>
+                <h3 className="font-semibold mb-4 text-slate-800 dark:text-white">主题颜色</h3>
+                <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">选择您喜欢的主题颜色</p>
+
+                <div className="grid grid-cols-4 gap-3">
+                    {THEME_COLORS.map((color) => {
+                        const isSelected = colorTheme === color.id;
+
                         return (
                             <button
-                                key={preset.name}
-                                onClick={() => onPresetClick(preset.config)}
-                                className="relative p-4 shape-lg text-white text-sm font-medium transition-all"
+                                key={color.id}
+                                onClick={() => setColorTheme(color.id)}
+                                className={`
+                                    relative p-4 rounded-xl transition-all duration-200 hover-lift
+                                    ${isSelected ? 'ring-2 ring-offset-2 dark:ring-offset-slate-900' : ''}
+                                `}
                                 style={{
-                                    background: `linear-gradient(${preset.config.direction}, ${preset.config.from}, ${preset.config.to})`,
-                                    outline: isSelected ? '3px solid var(--md-primary)' : 'none',
-                                    outlineOffset: '2px',
-                                }}
+                                    background: `linear-gradient(135deg, ${color.primary} 0%, ${color.dark} 100%)`,
+                                    '--tw-ring-color': color.primary,
+                                } as React.CSSProperties}
                             >
-                                {preset.name}
+                                <div className="flex flex-col items-center gap-2">
+                                    <div
+                                        className="w-8 h-8 rounded-full bg-white shadow-sm"
+                                        style={{ backgroundColor: color.light }}
+                                    />
+                                    <span className="text-xs font-medium text-white">{color.name}</span>
+                                </div>
                                 {isSelected && (
-                                    <div className="absolute top-1 right-1 w-5 h-5 shape-full flex items-center justify-center" style={{ backgroundColor: 'var(--md-primary)' }}>
-                                        <Check className="w-3 h-3 text-white" />
+                                    <div className="absolute -top-1 -right-1 w-6 h-6 rounded-full bg-white flex items-center justify-center shadow-md">
+                                        <Check className="w-4 h-4" style={{ color: color.primary }} />
                                     </div>
                                 )}
                             </button>
                         );
                     })}
                 </div>
-            </Card>
-
-            {/* 自定义 */}
-            <Card title="自定义颜色">
-                <div className="grid grid-cols-2 gap-4 mb-4">
-                    <ColorPicker label="起始颜色" value={customFrom} onChange={setCustomFrom} />
-                    <ColorPicker label="结束颜色" value={customTo} onChange={setCustomTo} />
-                </div>
-                <button
-                    onClick={onApply}
-                    className="px-6 py-2.5 shape-full text-sm font-medium"
-                    style={{ backgroundColor: 'var(--md-primary)', color: 'var(--md-on-primary)' }}
-                >
-                    应用自定义颜色
-                </button>
-            </Card>
+            </div>
         </div>
     );
 }
@@ -672,10 +685,12 @@ function PromptTab() {
 
 // ============ 通用组件 ============
 function Card({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
+    const { isDark } = useTheme();
+
     return (
-        <div className="p-6 shape-xl elevation-1" style={{ backgroundColor: 'var(--md-surface-container-low)' }}>
+        <div className={`p-6 rounded-2xl shadow-sm ${isDark ? 'glass-dark-theme' : 'glass'}`}>
             <div className="flex items-center justify-between mb-4">
-                <h3 className="font-medium" style={{ color: 'var(--md-on-surface)' }}>{title}</h3>
+                <h3 className="font-semibold text-slate-800 dark:text-white">{title}</h3>
                 {action}
             </div>
             {children}
@@ -684,19 +699,21 @@ function Card({ title, children, action }: { title: string; children: React.Reac
 }
 
 function InputField({ label, value, onChange, placeholder, type = 'text' }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string }) {
+    const { isDark } = useTheme();
+
     return (
         <div>
-            <label className="block text-sm mb-2" style={{ color: 'var(--md-on-surface-variant)' }}>{label}</label>
+            <label className="block text-sm mb-2 text-slate-600 dark:text-slate-400">{label}</label>
             <input
                 type={type}
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
                 placeholder={placeholder}
-                className="w-full px-3 py-2 shape-sm text-sm"
+                className="w-full px-3 py-2 rounded-lg text-sm outline-none transition-all"
                 style={{
-                    backgroundColor: 'var(--md-surface-container-highest)',
+                    backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : 'white',
                     color: 'var(--md-on-surface)',
-                    border: '1px solid var(--md-outline)',
+                    border: '1px solid var(--md-outline-variant)',
                 }}
             />
         </div>
@@ -704,20 +721,27 @@ function InputField({ label, value, onChange, placeholder, type = 'text' }: { la
 }
 
 function ColorPicker({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+    const { isDark } = useTheme();
+
     return (
         <div>
-            <label className="block text-sm mb-2" style={{ color: 'var(--md-on-surface-variant)' }}>{label}</label>
+            <label className="block text-sm mb-2 text-slate-600 dark:text-slate-400">{label}</label>
             <div className="flex items-center gap-2">
-                <input type="color" value={value} onChange={(e) => onChange(e.target.value)} className="w-12 h-12 shape-md cursor-pointer border-none" />
+                <input
+                    type="color"
+                    value={value}
+                    onChange={(e) => onChange(e.target.value)}
+                    className="w-12 h-12 rounded-lg cursor-pointer border-none shadow-sm"
+                />
                 <input
                     type="text"
                     value={value}
                     onChange={(e) => onChange(e.target.value)}
-                    className="flex-1 px-3 py-2 shape-sm text-sm font-mono"
+                    className="flex-1 px-3 py-2 rounded-lg text-sm font-mono outline-none"
                     style={{
-                        backgroundColor: 'var(--md-surface-container-highest)',
+                        backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : 'white',
                         color: 'var(--md-on-surface)',
-                        border: '1px solid var(--md-outline)',
+                        border: '1px solid var(--md-outline-variant)',
                     }}
                 />
             </div>

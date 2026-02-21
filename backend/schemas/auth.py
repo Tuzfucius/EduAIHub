@@ -37,8 +37,15 @@ class UserResponse(BaseModel):
 class Token(BaseModel):
     """JWT 令牌响应"""
     access_token: str
+    refresh_token: Optional[str] = None
     token_type: str = "bearer"
+    expires_in: int = 3600  # 过期时间（秒）
     user: UserResponse
+
+
+class RefreshTokenRequest(BaseModel):
+    """刷新令牌请求"""
+    refresh_token: str
 
 
 class TokenData(BaseModel):
