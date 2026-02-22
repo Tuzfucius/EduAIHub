@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Bot, User, Sparkles, Loader2, Paperclip, Settings2, Hash, Plus, MessageSquare, Trash2, Cpu, SlidersHorizontal, Eye, FileText, Image as ImageIcon, X, ChevronDown, ChevronRight, BrainCircuit, PanelLeftClose, PanelRightClose, PanelLeft, PanelRight, Link, Expand, Shrink, FileCode, Check, Copy, Pencil, MoreVertical } from 'lucide-react';
+import { Send, Bot, User, Sparkles, Loader2, Paperclip, Settings2, Hash, Plus, MessageSquare, Trash2, Cpu, SlidersHorizontal, Eye, FileText, Image as ImageIcon, X, ChevronDown, ChevronRight, BrainCircuit, PanelLeftClose, PanelRightClose, PanelLeft, PanelRight, Link, Expand, Shrink, FileCode, Check, Copy, Pencil, MoreVertical, Database } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -214,7 +214,9 @@ export default function AISolverPage() {
     // --- Context Menu & Session Editing ---
     const [contextMenu, setContextMenu] = useState<{ x: number, y: number, sessionId: string } | null>(null);
     const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
-    const [editSessionTitle, setEditSessionTitle] = useState('');
+    // Current RAG mode state
+    const [ragEnabled, setRagEnabled] = useState(false);
+    const [ragStatusMessage, setRagStatusMessage] = useState('');
 
     const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -379,6 +381,34 @@ export default function AISolverPage() {
     const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!e.target.files) return;
         const files = Array.from(e.target.files);
+
+        if (ragEnabled) {
+            // Upload to Local Python RAG Backend
+            setRagStatusMessage('正在切分并向量化文档...');
+            for (const file of files) {
+                const formData = new FormData();
+                formData.append('file', file);
+                try {
+                    const res = await fetch('http://127.0.0.1:8500/api/v1/rag/upload', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    if (res.ok) {
+                        setRagStatusMessage(`已装载: ${file.name}`);
+                        setTimeout(() => setRagStatusMessage(''), 3000);
+                    } else {
+                        setRagStatusMessage('向量解析失败');
+                    }
+                } catch (error) {
+                    console.error("RAG Upload Error", error);
+                    setRagStatusMessage('无法连接到知识库服务 (Python后端未启动)');
+                }
+            }
+            if (fileInputRef.current) fileInputRef.current.value = '';
+            return;
+        }
+
+        // Standard Attachment Flow
         const newAttachments: Attachment[] = [];
 
         for (const file of files) {
@@ -457,8 +487,44 @@ export default function AISolverPage() {
         updateActiveSession([...updatedMessages, { id: botMsgId, role: 'assistant', content: '' }], newTitle);
 
         try {
+            // STEP 1: RAG Pre-query if enabled
+            let ragContext = "";
+            let ragReferences = [];
+            if (ragEnabled && userMsgContent.trim()) {
+                try {
+                    const formData = new FormData();
+                    formData.append('query', userMsgContent);
+                    formData.append('top_k', '3');
+                    formData.append('alpha', '0.5'); // Hybrid Search
+
+                    const ragRes = await fetch('http://127.0.0.1:8500/api/v1/rag/query', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    if (ragRes.ok) {
+                        const ragData = await ragRes.json();
+                        if (ragData.data && ragData.data.length > 0) {
+                            ragContext = "\n\n=== 检索到的本地知识库信息 ===\n" + ragData.data.map((r: any, i: number) => {
+                                ragReferences.push(r.metadata?.source || "Unknown");
+                                return `[引用 ${i + 1}] (溯源: ${r.metadata?.source || "Unknown"})\n${r.content}\n`;
+                            }).join('---\n');
+                        } else {
+                            // Empty RAG response context
+                            ragContext = "\n\n=== 系统提示 ===\n未在知识库中检索到强相关信息，请基于自身知识谨慎作答，或直接告知用户未找到相关参考。";
+                        }
+                    }
+                } catch (e) {
+                    console.warn("RAG API Call Failed, falling back to base LLM", e);
+                }
+            }
+
             // Generate system prompt
-            const systemMsg = await generateSystemMessage(globalSettings as PromptSettings, user?.username);
+            const baseSystemMsg = await generateSystemMessage(globalSettings as PromptSettings, user?.username);
+            const systemMsg = {
+                ...baseSystemMsg,
+                content: baseSystemMsg.content + ragContext
+            };
+
             const chatHistory = [systemMsg].concat(
                 updatedMessages.map(m => {
                     let contentPayload: any = m.content || "";
@@ -821,6 +887,23 @@ export default function AISolverPage() {
 
                         <div className="absolute inset-0 bg-gradient-to-r from-blue-500 to-purple-500 rounded-3xl blur opacity-20 group-focus-within:opacity-40 transition-opacity duration-500 -z-10"></div>
                         <div className="relative flex items-end gap-2 bg-white dark:bg-slate-800 rounded-3xl p-2 pl-5 shadow-xl border border-slate-100 dark:border-slate-700">
+
+                            {/* RAG Context Button */}
+                            <button
+                                onClick={() => setRagEnabled(!ragEnabled)}
+                                title={ragEnabled ? "知识大脑开启中 (上传文件将入库)" : "连接本地知识大脑"}
+                                className={`absolute -top-11 left-4 flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition-all shadow-sm ${ragEnabled ? 'bg-indigo-500 text-white border border-indigo-400' : 'bg-white dark:bg-slate-800 text-slate-500 hover:text-indigo-500 border border-slate-200 dark:border-slate-700'}`}
+                            >
+                                <Database className={`w-3.5 h-3.5 ${ragEnabled ? 'animate-pulse' : ''}`} />
+                                {ragEnabled ? 'RAG知识库 (高能区)' : '接入深层知识网'}
+                            </button>
+
+                            {ragStatusMessage && (
+                                <div className="absolute -top-10 left-44 bg-green-500 text-white px-3 py-1 rounded-full text-[11px] font-bold animate-pulse shadow-md transition-all">
+                                    {ragStatusMessage}
+                                </div>
+                            )}
+
                             <textarea
                                 value={input}
                                 onChange={e => setInput(e.target.value)}

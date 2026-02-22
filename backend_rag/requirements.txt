@@ -1,0 +1,9 @@
+fastapi[standard]
+uvicorn
+chromadb
+sentence-transformers
+pymupdf
+python-docx
+rank_bm25
+jieba
+pydantic
