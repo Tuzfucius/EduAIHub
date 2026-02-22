@@ -9,6 +9,7 @@ import AISolverPage from '@/pages/AISolver';
 import MaterialsPage from '@/pages/Materials';
 import FocusPage from '@/pages/Focus';
 import SettingsPage from '@/pages/Settings';
+import KnowledgeBasePage from '@/pages/KnowledgeBase';
 
 // Route Guard component
 function RequireAuth({ children }: { children: JSX.Element }) {
@@ -70,6 +71,7 @@ function AppRoutes() {
         >
           <Route path="dashboard" element={<PageWrapper><DashboardPage /></PageWrapper>} />
           <Route path="solver" element={<PageWrapper><AISolverPage /></PageWrapper>} />
+          <Route path="knowledge" element={<PageWrapper><KnowledgeBasePage /></PageWrapper>} />
           <Route path="materials" element={<PageWrapper><MaterialsPage /></PageWrapper>} />
           <Route path="settings" element={<PageWrapper><SettingsPage /></PageWrapper>} />
           <Route index element={<Navigate to="/dashboard" replace />} />

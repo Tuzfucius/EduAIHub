@@ -22,6 +22,9 @@ export interface UserSettings {
     promptMode: 'composed' | 'custom';
     activePromptId: string;
     customPromptSnippet: string;
+    ragEmbedModel: string;
+    ragAlpha: number;
+    ragTopK: number;
 }
 
 const DEFAULT_SETTINGS: UserSettings = {
@@ -34,6 +37,9 @@ const DEFAULT_SETTINGS: UserSettings = {
     promptMode: 'composed',
     activePromptId: '',
     customPromptSnippet: '',
+    ragEmbedModel: 'BAAI/bge-m3',
+    ragAlpha: 0.5,
+    ragTopK: 3,
 };
 
 let currentUserId: string | null = null;

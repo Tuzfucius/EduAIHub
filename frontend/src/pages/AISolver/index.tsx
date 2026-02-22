@@ -214,9 +214,13 @@ export default function AISolverPage() {
     // --- Context Menu & Session Editing ---
     const [contextMenu, setContextMenu] = useState<{ x: number, y: number, sessionId: string } | null>(null);
     const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+    const [editSessionTitle, setEditSessionTitle] = useState('');
+
     // Current RAG mode state
     const [ragEnabled, setRagEnabled] = useState(false);
     const [ragStatusMessage, setRagStatusMessage] = useState('');
+    const [collections, setCollections] = useState<{ name: string, count: number }[]>([]);
+    const [ragCollection, setRagCollection] = useState('default');
 
     const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -266,6 +270,31 @@ export default function AISolverPage() {
         return () => {
             window.removeEventListener('storage', handleStorageChange);
             window.removeEventListener('focus', handleStorageChange);
+        };
+    }, []);
+
+    // Fetch collections for RAG dropdown
+    useEffect(() => {
+        const fetchCols = async () => {
+            try {
+                const res = await fetch('http://127.0.0.1:8500/api/v1/rag/collections');
+                if (res.ok) {
+                    const data = await res.json();
+                    setCollections(data.data || []);
+                    if (data.data && data.data.length > 0 && !data.data.find((c: any) => c.name === 'default')) {
+                        setRagCollection(data.data[0].name);
+                    }
+                }
+            } catch (e) { }
+        };
+        fetchCols();
+
+        // Refresh collections periodically or when tab focuses
+        const interval = setInterval(fetchCols, 10000);
+        window.addEventListener('focus', fetchCols);
+        return () => {
+            clearInterval(interval);
+            window.removeEventListener('focus', fetchCols);
         };
     }, []);
 
@@ -388,6 +417,7 @@ export default function AISolverPage() {
             for (const file of files) {
                 const formData = new FormData();
                 formData.append('file', file);
+                formData.append('collection_name', ragCollection);
                 try {
                     const res = await fetch('http://127.0.0.1:8500/api/v1/rag/upload', {
                         method: 'POST',
@@ -492,14 +522,19 @@ export default function AISolverPage() {
             let ragReferences = [];
             if (ragEnabled && userMsgContent.trim()) {
                 try {
-                    const formData = new FormData();
-                    formData.append('query', userMsgContent);
-                    formData.append('top_k', '3');
-                    formData.append('alpha', '0.5'); // Hybrid Search
+                    const payload = {
+                        query: userMsgContent,
+                        top_k: globalSettings?.ragTopK || 3,
+                        alpha: globalSettings?.ragAlpha ?? 0.5,
+                        collection_name: ragCollection
+                    };
 
                     const ragRes = await fetch('http://127.0.0.1:8500/api/v1/rag/query', {
                         method: 'POST',
-                        body: formData
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(payload)
                     });
                     if (ragRes.ok) {
                         const ragData = await ragRes.json();
@@ -889,14 +924,29 @@ export default function AISolverPage() {
                         <div className="relative flex items-end gap-2 bg-white dark:bg-slate-800 rounded-3xl p-2 pl-5 shadow-xl border border-slate-100 dark:border-slate-700">
 
                             {/* RAG Context Button */}
-                            <button
-                                onClick={() => setRagEnabled(!ragEnabled)}
-                                title={ragEnabled ? "知识大脑开启中 (上传文件将入库)" : "连接本地知识大脑"}
-                                className={`absolute -top-11 left-4 flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition-all shadow-sm ${ragEnabled ? 'bg-indigo-500 text-white border border-indigo-400' : 'bg-white dark:bg-slate-800 text-slate-500 hover:text-indigo-500 border border-slate-200 dark:border-slate-700'}`}
-                            >
-                                <Database className={`w-3.5 h-3.5 ${ragEnabled ? 'animate-pulse' : ''}`} />
-                                {ragEnabled ? 'RAG知识库 (高能区)' : '接入深层知识网'}
-                            </button>
+                            <div className="absolute -top-11 left-4 flex items-center gap-2">
+                                <button
+                                    onClick={() => setRagEnabled(!ragEnabled)}
+                                    title={ragEnabled ? "知识大脑开启中 (上传文件将入库)" : "连接本地知识大脑"}
+                                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition-all shadow-sm ${ragEnabled ? 'bg-indigo-500 text-white border border-indigo-400' : 'bg-white dark:bg-slate-800 text-slate-500 hover:text-indigo-500 border border-slate-200 dark:border-slate-700'}`}
+                                >
+                                    <Database className={`w-3.5 h-3.5 ${ragEnabled ? 'animate-pulse' : ''}`} />
+                                    {ragEnabled ? 'RAG知识库 (高能区)' : '接入深层知识网'}
+                                </button>
+
+                                {ragEnabled && collections.length > 0 && (
+                                    <select
+                                        value={ragCollection}
+                                        onChange={e => setRagCollection(e.target.value)}
+                                        className="bg-white dark:bg-slate-800 border border-indigo-200 dark:border-slate-700 text-indigo-600 dark:text-indigo-400 text-xs font-bold rounded-full px-3 py-1.5 outline-none shadow-sm cursor-pointer"
+                                    >
+                                        <option value="default">默认集合 (Default)</option>
+                                        {collections.filter(c => c.name !== 'default').map(c => (
+                                            <option key={c.name} value={c.name}>{c.name} ({c.count})</option>
+                                        ))}
+                                    </select>
+                                )}
+                            </div>
 
                             {ragStatusMessage && (
                                 <div className="absolute -top-10 left-44 bg-green-500 text-white px-3 py-1 rounded-full text-[11px] font-bold animate-pulse shadow-md transition-all">

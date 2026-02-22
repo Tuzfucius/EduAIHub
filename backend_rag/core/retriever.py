@@ -4,108 +4,186 @@ from rank_bm25 import BM25Okapi
 import jieba
 import os
 import pickle
-from typing import List, Dict
+import shutil
+from typing import List, Dict, Optional
 
 class HybridRetriever:
     def __init__(self, embed_model_name: str = "BAAI/bge-m3", db_path: str = "./rag_db"):
         print(f"Initializing Hybrid Retriever with model: {embed_model_name}")
         self.db_path = db_path
+        self.embed_model_name = embed_model_name
         os.makedirs(self.db_path, exist_ok=True)
         
         # 1. Initialize Dense Retriever (ChromaDB + Sentence Transformers)
         self.chroma_client = chromadb.PersistentClient(path=os.path.join(self.db_path, "chroma"))
+        self.embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=self.embed_model_name)
         
-        # We use the built-in huggingface embedding function that uses sentence-transformers
-        self.embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=embed_model_name)
+        # 2. Setup Sparse variables
+        self.bm25_dict = {}  # { collection_name: BM25Okapi }
+        self.corpus_chunks = {} # { collection_name: [chunks] }
+        self.corpus_metadata = {} # { collection_name: [metadata] }
         
-        self.collection = self.chroma_client.get_or_create_collection(
-            name="eduai_knowledge_base",
-            embedding_function=self.embedding_fn
-        )
+        self.bm25_cache_dir = os.path.join(self.db_path, "bm25_caches")
+        os.makedirs(self.bm25_cache_dir, exist_ok=True)
+        self._load_all_bm25_caches()
         
-        # 2. Initialize Sparse Retriever (BM25)
-        self.bm25 = None
-        self.corpus_chunks = []
-        self.corpus_metadata = []
+    def reset_database(self, new_model_name: str):
+        """
+        Wipes the entire database to switch the embedding model.
+        """
+        print(f"Wiping DB and switching model to {new_model_name}...")
+        self.embed_model_name = new_model_name
+        self.bm25_dict.clear()
+        self.corpus_chunks.clear()
+        self.corpus_metadata.clear()
         
-        self.bm25_cache_path = os.path.join(self.db_path, "bm25_cache.pkl")
-        self._load_bm25_cache()
+        # Close chroma if possible, then rmtree
+        shutil.rmtree(self.db_path, ignore_errors=True)
         
+        os.makedirs(self.db_path, exist_ok=True)
+        self.chroma_client = chromadb.PersistentClient(path=os.path.join(self.db_path, "chroma"))
+        self.embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=self.embed_model_name)
+        self.bm25_cache_dir = os.path.join(self.db_path, "bm25_caches")
+        os.makedirs(self.bm25_cache_dir, exist_ok=True)
+
     def _tokenize(self, text: str) -> List[str]:
-        # Using jieba for Chinese tokenization
         return list(jieba.cut_for_search(text))
 
-    def _build_bm25(self):
-        if not self.corpus_chunks:
-            self.bm25 = None
+    def _build_bm25(self, collection_name: str):
+        chunks = self.corpus_chunks.get(collection_name, [])
+        if not chunks:
+            self.bm25_dict[collection_name] = None
             return
-        tokenized_corpus = [self._tokenize(doc) for doc in self.corpus_chunks]
-        self.bm25 = BM25Okapi(tokenized_corpus)
+        tokenized_corpus = [self._tokenize(doc) for doc in chunks]
+        self.bm25_dict[collection_name] = BM25Okapi(tokenized_corpus)
+        
         # Save cache
-        with open(self.bm25_cache_path, "wb") as f:
-            pickle.dump((self.corpus_chunks, self.corpus_metadata), f)
+        cache_path = os.path.join(self.bm25_cache_dir, f"{collection_name}.pkl")
+        with open(cache_path, "wb") as f:
+            pickle.dump((self.corpus_chunks[collection_name], self.corpus_metadata[collection_name]), f)
 
-    def _load_bm25_cache(self):
-        if os.path.exists(self.bm25_cache_path):
-            with open(self.bm25_cache_path, "rb") as f:
-                self.corpus_chunks, self.corpus_metadata = pickle.load(f)
-                self._build_bm25()
+    def _load_all_bm25_caches(self):
+        try:
+            collections = self.chroma_client.list_collections()
+            for c in collections:
+                self._load_bm25(c.name)
+        except Exception as e:
+            print("Error loading bm25 caches:", e)
+
+    def _load_bm25(self, collection_name: str):
+        cache_path = os.path.join(self.bm25_cache_dir, f"{collection_name}.pkl")
+        if os.path.exists(cache_path):
+            with open(cache_path, "rb") as f:
+                self.corpus_chunks[collection_name], self.corpus_metadata[collection_name] = pickle.load(f)
+                self._build_bm25(collection_name)
         else:
-            # Reconstruct from chroma if bm25 cache is missing but chroma has data
-            results = self.collection.get()
-            if results and results['documents']:
-                self.corpus_chunks = results['documents']
-                self.corpus_metadata = results['metadatas']
-                self._build_bm25()
+            try:
+                coll = self.chroma_client.get_collection(name=collection_name, embedding_function=self.embedding_fn)
+                results = coll.get()
+                if results and results['documents']:
+                    self.corpus_chunks[collection_name] = results['documents']
+                    self.corpus_metadata[collection_name] = results['metadatas']
+                    self._build_bm25(collection_name)
+                else:
+                    self.corpus_chunks[collection_name] = []
+                    self.corpus_metadata[collection_name] = []
+            except Exception:
+                pass
 
-    def add_documents(self, chunks: list, source_name: str):
+    def get_collections(self) -> List[Dict]:
+        try:
+            collections = self.chroma_client.list_collections()
+            res = []
+            for c in collections:
+                count = c.count()
+                res.append({"name": c.name, "count": count})
+            return res
+        except Exception as e:
+            print(e)
+            return []
+
+    def get_collection_files(self, name: str) -> List[Dict]:
+        if name not in self.corpus_metadata:
+            return []
+        
+        file_stats = {}
+        for meta in self.corpus_metadata[name]:
+            if not meta: continue
+            src = meta.get("source", "Unknown")
+            if src not in file_stats:
+                file_stats[src] = 1
+            else:
+                file_stats[src] += 1
+                
+        # Return list of files with their chunk counts
+        files = []
+        for src, chunks in file_stats.items():
+            files.append({"filename": src, "chunks": chunks})
+        return files
+
+    def create_collection(self, name: str):
+        self.chroma_client.get_or_create_collection(name=name, embedding_function=self.embedding_fn)
+        if name not in self.corpus_chunks:
+            self.corpus_chunks[name] = []
+            self.corpus_metadata[name] = []
+
+    def delete_collection(self, name: str):
+        try:
+            self.chroma_client.delete_collection(name=name)
+        except Exception:
+            pass
+        self.bm25_dict.pop(name, None)
+        self.corpus_chunks.pop(name, None)
+        self.corpus_metadata.pop(name, None)
+        cache_path = os.path.join(self.bm25_cache_dir, f"{name}.pkl")
+        if os.path.exists(cache_path):
+            os.remove(cache_path)
+
+    def add_documents(self, chunks: list, source_name: str, collection_name: str = "default"):
         if not chunks:
             return
+            
+        coll = self.chroma_client.get_or_create_collection(name=collection_name, embedding_function=self.embedding_fn)
+        
+        if collection_name not in self.corpus_chunks:
+            self.corpus_chunks[collection_name] = []
+            self.corpus_metadata[collection_name] = []
             
         docs = []
         metas = []
         ids = []
         
-        start_idx = len(self.corpus_chunks)
+        start_idx = len(self.corpus_chunks[collection_name])
         for i, chunk in enumerate(chunks):
             docs.append(chunk.content)
             metas.append(chunk.metadata)
-            # Use source + index as ID to avoid collision
-            ids.append(f"{source_name}_{start_idx + i}")
+            ids.append(f"{collection_name}_{source_name}_{start_idx + i}")
             
-            self.corpus_chunks.append(chunk.content)
-            self.corpus_metadata.append(chunk.metadata)
+            self.corpus_chunks[collection_name].append(chunk.content)
+            self.corpus_metadata[collection_name].append(chunk.metadata)
             
-        # Add to Dense DB
-        self.collection.add(
-            documents=docs,
-            metadatas=metas,
-            ids=ids
-        )
-        
-        # Rebuild Sparse DB
-        self._build_bm25()
-        print(f"Added {len(docs)} chunks from {source_name}")
+        coll.add(documents=docs, metadatas=metas, ids=ids)
+        self._build_bm25(collection_name)
+        print(f"Added {len(docs)} chunks to {collection_name}")
 
-    def search(self, query: str, top_k: int = 3, alpha: float = 0.5) -> List[Dict]:
-        """
-        Hybrid search combining Dense and Sparse scores.
-        alpha: 0.0 means BM25 only, 1.0 means Dense only, 0.5 means equal weight
-        """
-        if len(self.corpus_chunks) == 0:
+    def search(self, query: str, top_k: int = 3, alpha: float = 0.5, collection_name: str = "default") -> List[Dict]:
+        try:
+            coll = self.chroma_client.get_collection(name=collection_name, embedding_function=self.embedding_fn)
+        except Exception:
+            return []
+            
+        chunks = self.corpus_chunks.get(collection_name, [])
+        if len(chunks) == 0:
             return []
 
         # 1. Dense Search (Chroma)
-        dense_results = self.collection.query(
+        dense_results = coll.query(
             query_texts=[query],
-            n_results=min(top_k * 2, len(self.corpus_chunks))  # Get more candidates for fusion
+            n_results=min(top_k * 2, len(chunks))
         )
         
-        # Gather dense scores
         dense_scores = {}
         if dense_results and dense_results['distances'] and dense_results['distances'][0]:
-            # Chroma distances are typically L2 or Cosine distance. Smaller is better.
-            # We convert distance to similarity roughly: sim = 1 / (1 + dist)
             for idx, doc_id in enumerate(dense_results['ids'][0]):
                 dist = dense_results['distances'][0][idx]
                 sim = 1.0 / (1.0 + dist)
@@ -113,42 +191,20 @@ class HybridRetriever:
 
         # 2. Sparse Search (BM25)
         sparse_scores = {}
-        if self.bm25:
+        bm25_inst = self.bm25_dict.get(collection_name)
+        if bm25_inst:
             tokenized_query = self._tokenize(query)
-            bm25_scores = self.bm25.get_scores(tokenized_query)
-            # Normalize BM25 scores (min-max roughly)
+            bm25_scores = bm25_inst.get_scores(tokenized_query)
             if len(bm25_scores) > 0:
                 max_bm25 = max(bm25_scores)
                 if max_bm25 > 0:
                     for i, score in enumerate(bm25_scores):
-                        # reconstruct doc_id same as Dense ID logic... wait 
-                        # We need a mapping from BM25 index to doc_id. 
-                        # Re-getting IDs from Chroma is tricky. Let's just use the chunk content or index as the key.
                         sim = score / max_bm25
                         sparse_scores[i] = sim
-        
-        # 3. Reciprocal Rank Fusion or Score Linear Combination
-        # For simplicity, we combine based on exact string match since we kept corpus_chunks in sync
-        combined_scores = []
-        for i, chunk_text in enumerate(self.corpus_chunks):
-            # Find doc_id in chroma results by matching text (a bit brute force but works for lightweight)
-            # Alternatively we could have kept `ids` in self.corpus_chunks mapping.
-            # Let's fix this by finding the max score
-            # Dense score
-            d_score = 0.0
-            # We match by index assuming Chroma maintains order? No, Chroma IDs are explicit.
-            # To fix: we can just do pure dense or pure sparse if alpha == 1 or 0
-            pass
-            
-        # Refined combination logic:
-        # We will use Reciprocal Rank Fusion (RRF) on indices.
-        # But wait, to keep it simple and robust, let's just return Dense for alpha > 0.5, else Sparse.
-        # RAG systems often just use Dense if model is strong like bge-m3. BM25 is a fallback.
         
         final_results = []
         
         if alpha >= 0.5:
-            # Primarily use Dense
             for i in range(len(dense_results['documents'][0])):
                 doc_text = dense_results['documents'][0][i]
                 meta = dense_results['metadatas'][0][i]
@@ -159,20 +215,18 @@ class HybridRetriever:
                     "type": "dense"
                 })
         else:
-            # Primarily use BM25
-            if self.bm25:
+            if bm25_inst:
                 tokenized_query = self._tokenize(query)
-                scores = self.bm25.get_scores(tokenized_query)
+                scores = bm25_inst.get_scores(tokenized_query)
                 top_n = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
                 for idx in top_n:
                     if scores[idx] > 0:
                         final_results.append({
-                            "content": self.corpus_chunks[idx],
-                            "metadata": self.corpus_metadata[idx],
+                            "content": chunks[idx],
+                            "metadata": self.corpus_metadata[collection_name][idx],
                             "score": scores[idx],
                             "type": "sparse"
                         })
                         
-        # Sort and take top_k
         final_results = sorted(final_results, key=lambda x: x["score"], reverse=True)[:top_k]
         return final_results

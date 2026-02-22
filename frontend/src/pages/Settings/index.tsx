@@ -5,7 +5,7 @@ import * as promptService from '@/services/promptService';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '@/contexts/AuthContext';
 
-type TabId = 'account' | 'llm-api' | 'scaffolding' | 'persona' | 'prompts';
+type TabId = 'account' | 'llm-api' | 'scaffolding' | 'persona' | 'prompts' | 'knowledge';
 
 const gradeLabels: Record<string, string> = {
     freshman: '大一',
@@ -130,6 +130,7 @@ export default function SettingsPage() {
         { id: 'scaffolding', label: '引导模式', icon: <Sliders className="w-4 h-4" /> },
         { id: 'persona', label: 'AI 人格', icon: <Bot className="w-4 h-4" /> },
         { id: 'prompts', label: '提示词管理', icon: <MessageSquare className="w-4 h-4" /> },
+        { id: 'knowledge', label: '大模型与向量网络', icon: <Database className="w-4 h-4" /> },
     ];
 
     const ApiCard = ({ api, type }: { api: settingsService.ApiConfig; type: 'llm' }) => {
@@ -696,6 +697,88 @@ export default function SettingsPage() {
                                         <div className="overflow-y-auto max-h-[400px] no-scrollbar rounded-xl bg-slate-900/50 p-5 border border-slate-700/50">
                                             <pre className="text-sm text-emerald-400 whitespace-pre-wrap font-mono leading-relaxed">{promptPreview || '// Loading active system bounds...'}</pre>
                                         </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Knowledge & Vector Engine Tab */}
+                            {activeTab === 'knowledge' && (
+                                <div className="space-y-6">
+                                    <div>
+                                        <h3 className="text-2xl font-bold text-slate-800 dark:text-white mb-2">架构基库池 (Vector Engine)</h3>
+                                        <p className="text-slate-500 dark:text-slate-400">基于 QMD 级可插拔引擎的混合检索调控板。动态干预 Dense (稠密) 与 Sparse (稀疏) 融合算子权重。</p>
+                                    </div>
+
+                                    <div className="bg-white/80 dark:bg-slate-800/80 backdrop-blur-md rounded-3xl p-6 shadow-sm border border-slate-200 dark:border-slate-700 space-y-8">
+
+                                        {/* Embedding Model Config */}
+                                        <div className="space-y-3">
+                                            <div className="flex justify-between items-end">
+                                                <div>
+                                                    <label className="block text-sm font-bold text-slate-700 dark:text-slate-300">文本嵌入模型 (Embedding Model)</label>
+                                                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-lg">变更此模型将导致之前的向量维度错位。系统将<span className="text-rose-500 font-bold ml-1">彻底清空当前的 Chroma 数据库</span>并要求重新上传文献！</p>
+                                                </div>
+                                            </div>
+                                            <div className="flex gap-3">
+                                                <input
+                                                    value={settings.ragEmbedModel}
+                                                    onChange={e => updateSettings({ ragEmbedModel: e.target.value })}
+                                                    className="flex-1 px-4 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl font-mono text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                                                />
+                                                <button
+                                                    onClick={async () => {
+                                                        if (window.confirm(`即将以 '${settings.ragEmbedModel}' 为基座重置向量引擎。原有一切知识块都将灰飞烟灭！\n确认执行吗？`)) {
+                                                            try {
+                                                                await fetch('http://127.0.0.1:8500/api/v1/rag/config', {
+                                                                    method: 'POST',
+                                                                    headers: { 'Content-Type': 'application/json' },
+                                                                    body: JSON.stringify({ embed_model_name: settings.ragEmbedModel })
+                                                                });
+                                                                alert('重置指令已发送给 Python 守护引擎。');
+                                                            } catch (e) { }
+                                                        }
+                                                    }}
+                                                    className="px-6 bg-rose-500 hover:bg-rose-600 text-white rounded-xl font-bold transition-colors shrink-0"
+                                                >
+                                                    切流并重置
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        <div className="h-px w-full bg-slate-100 dark:bg-slate-700/50 border-0" />
+
+                                        {/* Fusion Alpha Config */}
+                                        <div className="space-y-5">
+                                            <div>
+                                                <label className="block text-sm font-bold text-slate-700 dark:text-slate-300">Alpha 混合检索比重 (RRF α)</label>
+                                                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-lg">决定在召回文献时，依赖纯向量语义相关度的占比。目前设置为 <strong className="text-indigo-500">{settings.ragAlpha}</strong></p>
+                                                <div className="flex items-center justify-between text-xs text-slate-400 font-mono mt-3 px-1">
+                                                    <span>0.0 (BM25 关键词绝对匹配)</span>
+                                                    <span>0.5 (对等混合)</span>
+                                                    <span>1.0 (纯向量语境搜索)</span>
+                                                </div>
+                                                <input
+                                                    type="range"
+                                                    min="0" max="1" step="0.1"
+                                                    value={settings.ragAlpha}
+                                                    onChange={e => updateSettings({ ragAlpha: parseFloat(e.target.value) })}
+                                                    className="w-full mt-2 accent-indigo-500"
+                                                />
+                                            </div>
+
+                                            <div>
+                                                <label className="block text-sm font-bold text-slate-700 dark:text-slate-300">Top-K 截断数</label>
+                                                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-lg">向大模型注入的最相关知识碎片片段上限数。当前限制 <strong className="text-indigo-500">{settings.ragTopK}</strong> 块</p>
+                                                <input
+                                                    type="range"
+                                                    min="1" max="10" step="1"
+                                                    value={settings.ragTopK}
+                                                    onChange={e => updateSettings({ ragTopK: parseInt(e.target.value) })}
+                                                    className="w-full mt-2 accent-indigo-500"
+                                                />
+                                            </div>
+                                        </div>
+
                                     </div>
                                 </div>
                             )}

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Outlet, NavLink } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { LayoutDashboard, MessageSquare, Library, LogOut, Sun, Moon, Settings } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Library, LogOut, Sun, Moon, Settings, Database } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 
@@ -12,7 +12,8 @@ export default function MainLayout() {
     const navItems = [
         { to: '/dashboard', icon: LayoutDashboard, label: '概览面板' },
         { to: '/solver', icon: MessageSquare, label: '智能解答' },
-        { to: '/materials', icon: Library, label: '我的知识库' },
+        { to: '/knowledge', icon: Database, label: '源知识库' },
+        { to: '/materials', icon: Library, label: '我的应用' },
         { to: '/settings', icon: Settings, label: '统一设置' }
     ];
 

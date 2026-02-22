@@ -36,8 +36,53 @@ async def startup_event():
 def health_check():
     return {"status": "ok", "ready": retriever is not None}
 
+@app.get("/api/v1/rag/collections")
+async def list_collections():
+    if not retriever:
+        raise HTTPException(status_code=500, detail="Retriever not initialized")
+    return {"status": "success", "data": retriever.get_collections()}
+
+class CreateCollectionReq(pydantic.BaseModel):
+    name: str
+
+@app.post("/api/v1/rag/collections")
+async def create_collection(req: CreateCollectionReq):
+    if not retriever:
+        raise HTTPException(status_code=500, detail="Retriever not initialized")
+    retriever.create_collection(req.name)
+    return {"status": "success", "message": f"Collection '{req.name}' created/ready"}
+
+@app.delete("/api/v1/rag/collections/{name}")
+async def delete_collection(name: str):
+    if not retriever:
+        raise HTTPException(status_code=500, detail="Retriever not initialized")
+    retriever.delete_collection(name)
+    return {"status": "success", "message": f"Collection '{name}' deleted"}
+
+@app.get("/api/v1/rag/collections/{name}/files")
+async def get_collection_files(name: str):
+    if not retriever:
+        raise HTTPException(status_code=500, detail="Retriever not initialized")
+    files = retriever.get_collection_files(name)
+    return {"status": "success", "data": files}
+
+class ConfigUpdateReq(pydantic.BaseModel):
+    embed_model_name: str
+
+@app.post("/api/v1/rag/config")
+async def update_config(req: ConfigUpdateReq, bg_tasks: BackgroundTasks):
+    if not retriever:
+        raise HTTPException(status_code=500, detail="Retriever not initialized")
+    # Doing this in background so we don't block the HTTP response on a long delete/download
+    bg_tasks.add_task(retriever.reset_database, req.embed_model_name)
+    return {"status": "success", "message": f"Model switch to {req.embed_model_name} initiated. DB is wiping."}
+
 @app.post("/api/v1/rag/upload")
-async def upload_document(file: UploadFile = File(...), bg_tasks: BackgroundTasks = BackgroundTasks()):
+async def upload_document(
+    file: UploadFile = File(...), 
+    collection_name: str = Form("default"),
+    bg_tasks: BackgroundTasks = BackgroundTasks()
+):
     """
     Streamlines document parsing and immediate addition to local DB
     """
@@ -54,7 +99,7 @@ async def upload_document(file: UploadFile = File(...), bg_tasks: BackgroundTask
         chunks = process_file(file_path)
         if chunks:
             # We add documents implicitly as dictionaries or objects
-            retriever.add_documents(chunks, source_name=file.filename)
+            retriever.add_documents(chunks, source_name=file.filename, collection_name=collection_name)
         # Cleanup
         if os.path.exists(file_path):
             os.remove(file_path)
@@ -66,13 +111,14 @@ class QueryRequest(pydantic.BaseModel):
     query: str
     top_k: int = 3
     alpha: float = 0.5 # 0.0 pure dense, 1.0 pure sparse
+    collection_name: str = "default"
 
 @app.post("/api/v1/rag/query")
 async def query_knowledge(req: QueryRequest):
     if not retriever:
         raise HTTPException(status_code=500, detail="Retriever not initialized")
     
-    results = retriever.search(req.query, top_k=req.top_k, alpha=req.alpha)
+    results = retriever.search(req.query, top_k=req.top_k, alpha=req.alpha, collection_name=req.collection_name)
     return {"status": "success", "data": results}
 
 if __name__ == "__main__":
