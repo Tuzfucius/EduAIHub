@@ -7,6 +7,10 @@ import pydantic
 
 from core.retriever import HybridRetriever
 from loaders.document_parser import process_file
+import core.model_manager as model_manager
+import asyncio
+from fastapi.responses import StreamingResponse
+import json
 
 app = FastAPI(title="EduAIHub Local RAG Microservice", version="1.0.0")
 
@@ -120,6 +124,71 @@ async def query_knowledge(req: QueryRequest):
     
     results = retriever.search(req.query, top_k=req.top_k, alpha=req.alpha, collection_name=req.collection_name)
     return {"status": "success", "data": results}
+
+# --- Model Manager Endpoints ---
+
+@app.get("/api/v1/models/list")
+async def get_models():
+    """
+    Returns the list of recommended models and their local download status.
+    """
+    installed = model_manager.get_installed_models()
+    
+    # Merge status into recommended models
+    results = []
+    for rm in model_manager.RECOMMENDED_MODELS:
+        status_info = model_manager.get_download_status(rm["id"])
+        
+        # Override status if it's already installed but not marked currently downloading
+        if rm["id"] in installed and status_info["status"] == "pending":
+            status = "completed"
+        else:
+            status = status_info["status"]
+            
+        results.append({
+            **rm,
+            "status": status,
+            "progress": status_info.get("progress", 0)
+        })
+        
+    return {"status": "success", "data": {"installed": installed, "models": results}}
+
+class DownloadReq(pydantic.BaseModel):
+    model_id: str
+
+@app.post("/api/v1/models/download")
+async def start_model_download(req: DownloadReq, bg_tasks: BackgroundTasks):
+    """
+    Triggers an asynchronous download of the requested model_id.
+    """
+    # Check if already downloading or installed
+    status = model_manager.get_download_status(req.model_id)
+    if status["status"] in ["downloading", "completed"]:
+        return {"status": "info", "message": f"Model is already {status['status']}"}
+        
+    bg_tasks.add_task(model_manager.download_model_task, req.model_id)
+    return {"status": "success", "message": f"Download started for {req.model_id}"}
+    
+@app.get("/api/v1/models/download/status")
+async def stream_download_status(model_id: str):
+    """
+    Server-Sent Events (SSE) endpoint to stream download progress to the frontend.
+    """
+    async def event_generator():
+        while True:
+            status = model_manager.get_download_status(model_id)
+            
+            # Format as SSE
+            data = json.dumps(status)
+            yield f"data: {data}\n\n"
+            
+            if status["status"] in ["completed", "failed"]:
+                # Send one final event and close stream
+                break
+                
+            await asyncio.sleep(1.0)  # poll every second
+            
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8500)
