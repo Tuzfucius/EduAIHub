@@ -46,21 +46,25 @@ export default function SettingsPage() {
         model: '',
         format: 'openai' as 'openai' | 'anthropic' | 'custom',
     });
+    const [addApiStep, setAddApiStep] = useState<1 | 2>(1);
 
     useEffect(() => {
-        if (userId) {
-            settingsService.setCurrentUser(userId);
+        const currentUser = user?.username || 'guest';
+        if (currentUser) {
+            settingsService.setCurrentUser(currentUser);
             setSettings(settingsService.getSettings());
             setLlmApis(settingsService.getLlmApis());
         }
         setSavedPrompts(promptService.getSavedPrompts());
-    }, [userId]);
+    }, [user?.username]);
 
     useEffect(() => {
         setPromptPreview(promptService.buildSystemPrompt(settings));
     }, [settings]);
 
     const refreshApis = () => {
+        const userId = user?.username || 'guest';
+        settingsService.setCurrentUser(userId);
         setLlmApis(settingsService.getLlmApis());
         setSettings(settingsService.getSettings());
     };
@@ -103,9 +107,22 @@ export default function SettingsPage() {
             isActive: llmApis.length === 0,
         });
         setNewApiForm({ name: '', apiKey: '', baseUrl: 'https://api.openai.com/v1', model: '', format: 'openai' });
+        setAddApiStep(1);
         setShowAddLlmModal(false);
         refreshApis();
     };
+
+    const PREDEFINED_PROVIDERS = [
+        { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', format: 'openai', icon: '🟢', color: 'bg-emerald-500' },
+        { id: 'anthropic', name: 'Anthropic', baseUrl: 'https://api.anthropic.com/v1', format: 'anthropic', icon: '🟧', color: 'bg-orange-500' },
+        { id: 'deepseek', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', format: 'openai', icon: '🐳', color: 'bg-blue-600' },
+        { id: 'siliconflow', name: '硅基流动 (SiliconFlow)', baseUrl: 'https://api.siliconflow.cn/v1', format: 'openai', icon: '⚡', color: 'bg-purple-600' },
+        { id: 'moonshot', name: 'Moonshot (Kimi)', baseUrl: 'https://api.moonshot.cn/v1', format: 'openai', icon: '🌙', color: 'bg-slate-800' },
+        { id: 'qwen', name: '通义千问 (Qwen)', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', format: 'openai', icon: '🟣', color: 'bg-indigo-600' },
+        { id: 'groq', name: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', format: 'openai', icon: '🚀', color: 'bg-red-500' },
+        { id: 'ollama', name: 'Ollama (本地部署)', baseUrl: 'http://localhost:11434/v1', format: 'openai', icon: '🦙', color: 'bg-slate-50 border border-slate-200 text-slate-800 dark:bg-slate-700 dark:text-white dark:border-slate-600' },
+        { id: 'custom', name: '自定义兼容网关', baseUrl: '', format: 'openai', icon: '🔧', color: 'bg-gray-500' },
+    ] as const;
 
     const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
         { id: 'account', label: '账户信息', icon: <User className="w-4 h-4" /> },
@@ -180,104 +197,169 @@ export default function SettingsPage() {
         );
     };
 
-    const AddApiModal = ({ isOpen, onClose, onSubmit, title }: { isOpen: boolean; onClose: () => void; onSubmit: () => void; title: string }) => (
+    const renderAddApiModal = () => (
         <AnimatePresence>
-            {isOpen && (
+            {showAddLlmModal && (
                 <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
-                    className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
-                    onMouseDown={onClose}
+                    className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+                    onMouseDown={() => setShowAddLlmModal(false)}
                 >
                     <motion.div
-                        initial={{ scale: 0.9, opacity: 0 }}
-                        animate={{ scale: 1, opacity: 1 }}
-                        exit={{ scale: 0.9, opacity: 0 }}
-                        className="bg-white dark:bg-slate-800 rounded-2xl p-6 w-full max-w-md shadow-2xl"
+                        initial={{ scale: 0.95, opacity: 0, y: 20 }}
+                        animate={{ scale: 1, opacity: 1, y: 0 }}
+                        exit={{ scale: 0.95, opacity: 0, y: 20 }}
+                        className="bg-white dark:bg-slate-800 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
                         onClick={e => e.stopPropagation()}
                         onMouseDown={e => e.stopPropagation()}
                     >
-                        <div className="flex items-center justify-between mb-6">
-                            <h3 className="text-lg font-bold text-slate-800 dark:text-white flex items-center gap-2"><Globe className="w-5 h-5 text-blue-500" />{title}</h3>
-                            <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
+                        <div className="flex items-center justify-between p-6 border-b border-slate-100 dark:border-slate-700">
+                            <h3 className="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                                <Globe className="w-6 h-6 text-purple-500" />
+                                {addApiStep === 1 ? '选择服务商 (Provider)' : '网关接入向导'}
+                            </h3>
+                            <button onClick={() => { setShowAddLlmModal(false); setAddApiStep(1); }} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-xl transition-colors">
                                 <X className="w-5 h-5" />
                             </button>
                         </div>
-                        <div className="space-y-4">
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">配置名称 *</label>
-                                <input
-                                    type="text"
-                                    value={newApiForm.name}
-                                    onChange={e => setNewApiForm({ ...newApiForm, name: e.target.value })}
-                                    placeholder="例如：DeepSeek 专属通道"
-                                    className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">API 格式</label>
-                                <div className="grid grid-cols-2 gap-2">
-                                    {(['openai', 'custom'] as const).map(format => (
-                                        <button
-                                            key={format}
-                                            onClick={() => setNewApiForm({ ...newApiForm, format })}
-                                            className={`py-2 px-3 rounded-lg border-2 text-sm transition-all ${newApiForm.format === format
-                                                ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/30 text-purple-600'
-                                                : 'border-slate-200 dark:border-slate-600 hover:border-slate-300'
-                                                }`}
-                                        >
-                                            {format === 'openai' && 'OpenAI 兼容'}
-                                            {format === 'custom' && '自定义'}
-                                        </button>
-                                    ))}
+
+                        <div className="p-6 overflow-y-auto no-scrollbar flex-1">
+                            {addApiStep === 1 ? (
+                                <div>
+                                    <p className="text-slate-500 dark:text-slate-400 mb-6 font-medium">请选择您要接入的大语言模型服务商。系统将自动为您配置最佳的接入格式与连通地址。</p>
+                                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                                        {PREDEFINED_PROVIDERS.map(provider => (
+                                            <button
+                                                key={provider.id}
+                                                onClick={() => {
+                                                    setNewApiForm({
+                                                        name: provider.name,
+                                                        apiKey: '',
+                                                        baseUrl: provider.baseUrl,
+                                                        model: '',
+                                                        format: provider.format as any
+                                                    });
+                                                    setAddApiStep(2);
+                                                }}
+                                                className="flex flex-col items-center justify-center gap-3 p-5 rounded-2xl border-2 border-slate-100 dark:border-slate-700 hover:border-purple-500 dark:hover:border-purple-500 hover:shadow-lg hover:shadow-purple-500/10 transition-all bg-white dark:bg-slate-800/50 group"
+                                            >
+                                                <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-2xl shadow-sm ${provider.color.includes('bg-') ? provider.color + ' text-white' : provider.color} group-hover:scale-110 transition-transform`}>
+                                                    {provider.icon}
+                                                </div>
+                                                <span className="font-bold text-slate-700 dark:text-slate-200 text-sm text-center">{provider.name}</span>
+                                            </button>
+                                        ))}
+                                    </div>
                                 </div>
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">API Key *</label>
-                                <input
-                                    type="password"
-                                    value={newApiForm.apiKey}
-                                    onChange={e => setNewApiForm({ ...newApiForm, apiKey: e.target.value })}
-                                    placeholder="sk-..."
-                                    className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white font-mono text-sm"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Base URL</label>
-                                <input
-                                    type="text"
-                                    value={newApiForm.baseUrl}
-                                    onChange={e => setNewApiForm({ ...newApiForm, baseUrl: e.target.value })}
-                                    placeholder="https://api.openai.com/v1"
-                                    className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white font-mono text-sm"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">模型名称</label>
-                                <input
-                                    type="text"
-                                    value={newApiForm.model}
-                                    onChange={e => setNewApiForm({ ...newApiForm, model: e.target.value })}
-                                    placeholder="例如：deepseek-chat"
-                                    className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-white"
-                                />
-                            </div>
+                            ) : (
+                                <div className="space-y-5 max-w-xl mx-auto">
+                                    <div className="p-4 bg-indigo-50 dark:bg-indigo-900/20 rounded-xl flex items-start gap-4 mb-2">
+                                        <div className="p-2 bg-indigo-100 dark:bg-indigo-800/50 rounded-lg text-indigo-600 dark:text-indigo-400 mt-0.5">
+                                            <Key className="w-5 h-5" />
+                                        </div>
+                                        <div>
+                                            <h4 className="font-bold text-indigo-900 dark:text-indigo-300 text-sm mb-1">正在配置：{newApiForm.name}</h4>
+                                            <p className="text-xs text-indigo-700/70 dark:text-indigo-400/70 leading-relaxed text-balance">安全提示：您的 API 密钥仅会存储于本机的浏览器 LocalStorage 中，并随着网络请求直接透传至网关，EduAI 不会收集或长期持久化您的私钥至云端数据库。</p>
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">配置标识名 *</label>
+                                        <input
+                                            type="text"
+                                            value={newApiForm.name}
+                                            onChange={e => setNewApiForm({ ...newApiForm, name: e.target.value })}
+                                            placeholder="例如：我的 DeepSeek 专属通道"
+                                            className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-white focus:ring-2 focus:ring-purple-500 outline-none transition-shadow"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">底层通讯协议</label>
+                                        <div className="grid grid-cols-2 gap-3">
+                                            {(['openai', 'anthropic'] as const).map(format => (
+                                                <button
+                                                    key={format}
+                                                    onClick={() => setNewApiForm({ ...newApiForm, format })}
+                                                    className={`py-2.5 px-4 rounded-xl border-2 text-sm font-bold transition-all ${newApiForm.format === format
+                                                        ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400'
+                                                        : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 text-slate-600 dark:text-slate-400 bg-white dark:bg-slate-800'
+                                                        }`}
+                                                >
+                                                    {format === 'openai' && 'OpenAI 兼容协议'}
+                                                    {format === 'anthropic' && 'Anthropic 协议'}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">API Key (凭证) *</label>
+                                        <input
+                                            type="password"
+                                            value={newApiForm.apiKey}
+                                            onChange={e => setNewApiForm({ ...newApiForm, apiKey: e.target.value })}
+                                            placeholder="sk-xxxxxxxxxxxxxxxxxxxxxxxx"
+                                            className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-white font-mono text-sm focus:ring-2 focus:ring-purple-500 outline-none"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2 flex items-center justify-between">
+                                            <span>Base URL (API 转发地址)</span>
+                                            <span className="text-xs font-medium text-slate-400 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded">选填</span>
+                                        </label>
+                                        <input
+                                            type="text"
+                                            value={newApiForm.baseUrl}
+                                            onChange={e => setNewApiForm({ ...newApiForm, baseUrl: e.target.value })}
+                                            placeholder="https://api.openai.com/v1"
+                                            className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-white font-mono text-sm focus:ring-2 focus:ring-purple-500 outline-none"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2 flex items-center justify-between">
+                                            <span>默认兜底模型名称</span>
+                                            <span className="text-xs font-medium text-slate-400 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded">选填</span>
+                                        </label>
+                                        <input
+                                            type="text"
+                                            value={newApiForm.model}
+                                            onChange={e => setNewApiForm({ ...newApiForm, model: e.target.value })}
+                                            placeholder="选填，如前端未指定则使用此模型 (例如 deepseek-chat)"
+                                            className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-white font-mono text-sm focus:ring-2 focus:ring-purple-500 outline-none"
+                                        />
+                                    </div>
+                                </div>
+                            )}
                         </div>
-                        <div className="flex gap-3 mt-6">
+
+                        <div className="p-6 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex gap-3">
+                            {addApiStep === 2 && (
+                                <button
+                                    onClick={() => setAddApiStep(1)}
+                                    className="px-6 py-3 rounded-xl font-bold border border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 transition-colors"
+                                >
+                                    返回重选
+                                </button>
+                            )}
+                            <div className="flex-1"></div>
                             <button
-                                onClick={onClose}
-                                className="flex-1 py-3 rounded-xl border border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700"
+                                onClick={() => { setShowAddLlmModal(false); setAddApiStep(1); }}
+                                className="px-6 py-3 rounded-xl font-bold text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
                             >
                                 取消
                             </button>
-                            <button
-                                onClick={onSubmit}
-                                disabled={!newApiForm.name || !newApiForm.apiKey}
-                                className="flex-1 py-3 rounded-xl bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                立即添加网络
-                            </button>
+                            {addApiStep === 2 && (
+                                <button
+                                    onClick={() => {
+                                        handleAddLlmApi();
+                                    }}
+                                    disabled={!newApiForm.name || !newApiForm.apiKey}
+                                    className="px-8 py-3 rounded-xl font-bold bg-gradient-to-r from-purple-500 to-indigo-600 text-white hover:shadow-lg hover:shadow-purple-500/25 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95"
+                                >
+                                    确认存入保管库
+                                </button>
+                            )}
                         </div>
                     </motion.div>
                 </motion.div>
@@ -622,6 +704,8 @@ export default function SettingsPage() {
                 </div>
 
             </div>
+
+            {renderAddApiModal()}
         </div>
     );
 }
